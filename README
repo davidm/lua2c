@@ -1,0 +1,53 @@
+lua2c - converts Lua source code to C code.
+
+== Description
+
+The compiler is written entirely in Lua and converts Lua source code
+to C code using C API calls.
+
+WARNING: This code is in development and should be considered
+experimental.  It does successfully convert Lua's "bisect.lua"
+example, but it is otherwise incomplete, so dig into the code and fix
+anything that's not implemented or broken.  This code can be made
+robust for a large subset of Lua.  Please report bugs/patches on the
+wiki.
+
+Example usage:
+
+  lua lua2c.lua examples-lua/bisect.lua
+
+You may also use the shell script "lua2c" to compile Lua->C->machine
+code and execute all in one step.  However, you may need to edit the
+variables in the file to match your system.
+
+This project reuses Metalua's gg/mlp parser to convert Lua source to a
+Metalua-style[1] AST.  gg/mlp is written in pure Lua, and lua2c
+otherwise does not depend on Metalua.  gg/mlp from metalua-0.4.1-rc1
+is included in the lib folder.
+
+== Related Work
+
+A related effort luatoc by Hisham Muhammad[2] converts Lua bytecodes
+to C source.  lua2c will likely run into the same limitations concerning
+coroutines, upvalues, and tail calls.
+
+luagen++[3] uses C++ expression templates to translate Lua-like C++
+statements to C API calls.  The code generation is actually fairly
+similar to lua2c.
+
+== Project Page
+
+Project page: http://lua-users.org/wiki/LuaToCee
+
+== Licensing
+
+(c) 2008 David Manura.  Licensed under the same terms as Lua (MIT license).
+See LICENSE for full licensing details.
+
+== References
+
+[1] http://metalua.luaforge.net/manual006.html#toc17
+[2] http://lua-users.org/lists/lua-l/2006-07/msg00144.html
+[3] http://lua-users.org/wiki/LuaGenPlusPlus
+
+

@@ -1,0 +1,15 @@
+#!/bin/sh
+
+LUA=lua
+CC=gcc
+#CFLAGS=-g
+CFLAGS=-O2
+LFLAGS=-llua
+
+LUAFILE=$1
+FILENAME=${LUAFILE%.*}
+CFILE=${FILENAME}.c
+
+${LUA} lua2c.lua ${LUAFILE} > ${CFILE} || exit 1
+${CC} ${CFLAGS} ${CFILE} -o ${FILENAME} ${LFLAGS} || exit 1
+./${FILENAME}

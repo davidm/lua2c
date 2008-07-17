@@ -1,0 +1,12 @@
+2008-07-17
+  implemented: do, not
+  fixed and/or
+  other bug fixes
+
+2008-07-16
+  implemented: concat, table, method call, assign to locals, while.
+  arithmetic binary ops now generate functions rather than inline code.
+  many bug fixes
+
+2008-07-15
+  initial experimental version
