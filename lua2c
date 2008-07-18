@@ -12,4 +12,5 @@ CFILE=${FILENAME}.c
 
 ${LUA} lua2c.lua ${LUAFILE} > ${CFILE} || exit 1
 ${CC} ${CFLAGS} ${CFILE} -o ${FILENAME} ${LFLAGS} || exit 1
-./${FILENAME}
+shift
+./${FILENAME} $@

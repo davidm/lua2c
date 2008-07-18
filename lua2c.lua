@@ -49,6 +49,12 @@ end
 
 local src_filename = ...
 
+if not src_filename then
+  io.stderr:write("usage: lua2c filename.lua\n")
+  os.exit(1)
+end
+
+
 local src
 
 
@@ -292,7 +298,7 @@ local function makebinop(opid)
   local indent_save = indent
   indent = ''
   printf([[
-// warning: assumes indices in range LUA_REGISTRYINDEX < x < 0 are relative.
+/* warning: assumes indices in range LUA_REGISTRYINDEX < x < 0 are relative. */
 static double lc_%s(lua_State * L, int idxa, int idxb) {
   if (lua_isnumber(L,idxa) && lua_isnumber(L,idxb)) {
     return %s;
@@ -458,8 +464,73 @@ end
 -- Why does the Lua C API implement lua_lessthan but not lua_lessequal?
 -- (note: lessqual is defined in lvm.c).
 local function genleop(ast, where)
-  assert(false, 'FIX: <= NOT IMPL')
-  --FIX:TODO
+  local function makeop()
+    local old_code = code
+    code = precode
+
+    local indent_save = indent
+    indent = ''
+    printf(
+[[
+/* warning: assumes indices in range LUA_REGISTRYINDEX < x < 0 are relative. */
+static int lc_le(lua_State * L, int idxa, int idxb) {
+  if (lua_type(L,idxa) == LUA_TNUMBER && lua_type(L,idxb) == LUA_TNUMBER) {
+    return lua_tonumber(L,idxa) <= lua_tonumber(L,idxb);
+  }
+  else if (lua_type(L,idxa) == LUA_TSTRING && lua_type(L,idxb) == LUA_TSTRING) {
+    /* result similar to lvm.c l_strcmp */
+    return lua_lessthan(L,idxa,idxb) || lua_rawequal(L,idxa,idxb);
+  }
+  else if (luaL_getmetafield(L,idxa,"__le")||luaL_getmetafield(L,idxb,"__le")) {
+    lua_pushvalue(L,idxa < 0 && idxa > LUA_REGISTRYINDEX ? idxa-1 : idxa);
+    lua_pushvalue(L,idxb < 0 && idxb > LUA_REGISTRYINDEX ? idxb-2 : idxb);
+    lua_call(L,2,1);
+    const int result = lua_toboolean(L,-1);
+    lua_pop(L,1);
+    return result;
+  }
+  else if (luaL_getmetafield(L,idxa,"__lt")||luaL_getmetafield(L,idxb,"__lt")) {
+    lua_pushvalue(L,idxb < 0 && idxb > LUA_REGISTRYINDEX ? idxb-1 : idxb);
+    lua_pushvalue(L,idxa < 0 && idxa > LUA_REGISTRYINDEX ? idxa-2 : idxa);
+    lua_call(L,2,1);
+    const int result = ! lua_toboolean(L,-1);
+    lua_pop(L,1);
+    return result;
+  }
+  else {
+    return luaL_error(L, "attempt to compare");
+  }
+}
+]])
+
+    indent = indent_save
+
+    precode = code
+    code = old_code
+  end
+
+  local opid, a_ast, b_ast = ast[1], ast[2], ast[3]
+
+  local fname = "lc_le"
+  if not is_created[fname] then
+    makeop(opid)
+    is_created[fname] = true
+  end
+
+  local a_idx = genexpr(a_ast, 'anywhere')
+  local b_idx = genexpr(b_ast, 'anywhere')
+  local nstack = countstack(a_idx, b_idx)
+  a_idx, b_idx = adjustidxs(a_idx, b_idx)
+  if nstack == 0 then
+    printf("lua_pushboolean(L,lc_le(L,%d,%d));", a_idx, b_idx)
+  else
+    local id = nextid()
+    printf("const int %s = lc_le(L,%d,%d);", id, a_idx, b_idx)
+    printf("lua_pop(L,%d);", nstack)
+    printf("lua_pushboolean(L,%s);", id)
+  end
+
+  return -1
 end
 
 local function genlogbinop(ast, where)
@@ -518,6 +589,7 @@ local function genfunction(ast, where)
   localvars = {}
 
   for i,var_ast in ipairs(params_ast) do
+    assert(var_ast.tag ~= 'Dots', 'FIX:NOT IMPL: dots ...')
     assert(var_ast.tag == 'Id')
     local varname = var_ast[1]
     localvars[varname] = i
@@ -619,7 +691,7 @@ local function gencall(ast, where, nret)
     local ast2 = ast[i]
     genexpr(ast2, 'onstack', i == #ast and 'multret' or false)
   end
-  local narg = can_multret and "lua_gettop(L)-" .. id or #ast-1
+  local narg = can_multret and "lua_gettop(L)-" .. id or tostring(#ast-1)
   if nret == 'multret' then
     printf("lua_call(L,%s,LUA_MULTRET);", narg, #ast-1)
   else
@@ -741,8 +813,15 @@ end
 
 local function genif(ast)
   assert(#ast == 3 or #ast == 2, 'FIX:UNIMPLEMENTED')
-  local a_idx = genexpr(ast[1], 1, 'anywhere')
-  printf("if (lua_toboolean(L,%d)) {", a_idx)
+  local a_idx = genexpr(ast[1], 'anywhere')
+  if a_idx ~= -1 then
+    printf("if (lua_toboolean(L,%d)) {", a_idx)
+  else
+    local id = nextid()
+    printf("const int %s = lua_toboolean(L,-1);", id)
+    printf("lua_pop(L,1);")
+    printf("if (%s) {", id)
+  end
 
   indent = indent .. '  '
   local localvars_save = localvars
@@ -765,10 +844,6 @@ local function genif(ast)
     indent = indent:sub(1,#indent-2)  
 
     printf("}")
-  end
-
-  if a_idx == -1 then
-    printf("lua_pop(L,1);")
   end
 end
 
@@ -815,7 +890,7 @@ local function genfornum(ast)
   localvars[name_id] = var_absidx
 
   indent = indent .. '  '
-  printf("// local: %s at index %d", name_id, var_absidx)
+  printf("/* local: %s at index %d */", name_id, var_absidx)
   printf("lua_pushnumber(L, %s);", var_id)
   idxtop = idxtop + 1
   genblock(block_ast)
@@ -827,6 +902,76 @@ local function genfornum(ast)
   printf("  %s += %s;", var_id, step_id)
   printf("}")
  
+end
+
+-- Returns whether expression could possibly return a number of argument
+-- different from 1.
+-- note: expr_ast can be nil
+local function can_multi(expr_ast)
+  return expr_ast and (expr_ast.tag == 'Call' or expr_ast.tag == 'Invoke')
+end
+
+local function genforin(ast)
+  local names_ast, exprs_ast, block_ast = ast[1], ast[2], ast[3]
+
+  local multi = can_multi(exprs_ast[1])
+
+  local nlast = multi and 3 + 1 - #exprs_ast or 1
+  for i,expr_ast in ipairs(exprs_ast) do
+    genexpr(expr_ast, 'onstack', i==#exprs_ast and math.max(0,nlast))
+  end
+  if nlast < 0 then
+    printf("lua_pop(L,%d);", -nlast)
+  end
+
+  idxtop = idxtop + 3
+
+  local id = nextid()
+  printf("const int %s = lua_gettop(L);", id)
+
+  printf("while (1) {")
+
+  indent = indent .. '  '
+
+  printf("lua_settop(L,%s);", id)
+
+  -- local scope to evaluate block
+  local localvars_save = localvars
+  localvars = newscope()
+  for _,name_ast in ipairs(names_ast) do
+    local name_id = name_ast[1]; assert(name_ast.tag == 'Id')
+    idxtop = idxtop + 1
+    localvars[name_id] = idxtop
+  end
+
+  printf("lua_pushvalue(L,-3);")
+  printf("lua_pushvalue(L,-3);")
+  printf("lua_pushvalue(L,-3);")
+  printf("lua_call(L,2,%d);", #names_ast)
+  for i,name_ast in ipairs(names_ast) do
+    printf("/* local: %s at index %d */", name_ast[1], idxtop - #names_ast + i)
+  end
+
+  printf("if (lua_isnil(L,%d)) {", - #names_ast)
+  printf("  break;")
+  printf("}")
+
+  printf("lua_pushvalue(L,%d);", - #names_ast)
+  printf("lua_replace(L,%d);", - #names_ast - 2) 
+
+  genblock(block_ast)
+
+  idxtop = idxtop - 1
+  localvars = localvars_save
+
+  indent = indent:sub(1,#indent-2)
+
+  printf("}")
+
+  printf("lua_settop(L,%s - 3);", id)
+
+  idxtop = idxtop - 3
+
 end
 
 
@@ -937,6 +1082,8 @@ local function genstatement(stat_ast)
     end
   elseif stat_ast.tag == 'Fornum' then
     genfornum(stat_ast)
+  elseif stat_ast.tag == 'Forin' then
+    genforin(stat_ast)
   elseif stat_ast.tag == 'While' then
     genwhile(stat_ast)
   elseif stat_ast.tag == 'Do' then
@@ -981,7 +1128,7 @@ local function genfull(ast)
   code = ''
 
 
-  printf("// WARNING: This file was automatically generated by Lua2C.");
+  printf("/* WARNING: This file was automatically generated by Lua2C. */");
   printf("")
   printf("#ifdef __cplusplus")
   printf('extern "C" {')
@@ -1023,8 +1170,28 @@ static int traceback (lua_State *L) {
 
 
   printf [[
-int pmain(lua_State * L) {
+typedef struct {
+  int c;
+  const char ** v;
+} lc_args_t;
+
+
+/* create global arg table */
+void lc_createarg(lua_State * L, lc_args_t * args) {
+  int i;
+  lua_newtable(L);
+  for (i=0; i < args->c; i++) {
+    lua_pushstring(L, args->v[i]);
+    lua_rawseti(L, -2, i);
+  }
+  lua_setglobal(L, "arg");
+}
+
+int lc_pmain(lua_State * L) {
   luaL_openlibs(L);
+
+  lc_createarg(L, (lc_args_t*)lua_touserdata(L, 1));
+
   lua_pushcfunction(L, traceback);
   lua_pushcfunction(L, luamain);
   int status = lua_pcall(L, 0, 0, -2);
@@ -1034,11 +1201,12 @@ int pmain(lua_State * L) {
   return 0;
 }
 
-int main() {
+int main(int argc, const char ** argv) {
+  lc_args_t args = {argc, argv};
   lua_State * L = luaL_newstate();
   if (! L) { fputs("Failed creating Lua state.", stderr); exit(1); }
 
-  int status = lua_cpcall(L, pmain, 0);
+  int status = lua_cpcall(L, lc_pmain, &args);
   if (status != 0) {
     fputs(lua_tostring(L,-1), stderr);
   }

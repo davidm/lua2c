@@ -1,10 +1,5 @@
 # Makefile for building in g++/gnumake.
 
-LUA=./lua
-CXX=g++
-CXXFLAGS=-O2 -I$(LUA)/include -I$(LUA)/src -I.
-LDFLAGS=-L$(LUA)/lib -L$(LUA)/src -llua
-
 all :
 	@echo nothing to do
 
@@ -25,3 +20,9 @@ dist :
 	     cp lib/*.lua $$DIR/lib/ && \
 	     cp lib/metalua/*.lua $$DIR/lib/metalua/ && \
 	     tar czvf $$DIR.tar.gz $$DIR )
+
+clean :
+	rm -f *.stackdump
+	rm -f `find . -name '*~'`
+	rm -f `find . -name '*.c' -o -name '*.exe'`
+	rm -fr lua2c-*
