@@ -1,3 +1,10 @@
+2008-07-19
+  major refactoring: Conversion process is now
+    Lua string -> Lua AST -> C AST -> C string.
+    (last two were previously combined)
+  renamed lua2c script to clua
+  other bug fixes
+
 2008-07-18
   implemented: <=, for in, arg
   fix if (stack)

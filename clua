@@ -3,8 +3,8 @@
 LUA=lua
 CC=gcc
 #CFLAGS=-g
-CFLAGS=-O2
-LFLAGS=-llua
+CFLAGS="-O2 -Wall"
+LFLAGS="-llua"
 
 LUAFILE=$1
 FILENAME=${LUAFILE%.*}

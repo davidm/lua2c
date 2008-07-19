@@ -8,11 +8,12 @@ for a large subset of the Lua language (see limitations below).  The
 compiler is written entirely in Lua.
 
 WARNING: This code is in development and should be considered
-experimental.  It does successfully convert some of Lua's examples
-(e.g. "bisect.lua"), but it is otherwise incomplete, so dig into the
-code, fix anything that's broken or not implemented, and post the
-patch here. This code can be made robust for a large subset of Lua
-(but see limitations below).  Please report bugs/patches on the wiki.
+experimental.  It does successfully convert many of Lua's examples
+(e.g. "bisect.lua") but fails on the examples that use features
+identified in the limitations.  It is not currently well tested, so
+dig into the code, fix anything that's broken or not implemented, and
+post the patch here. This code can be made robust for a large subset
+of Lua.  Please report bugs/patches on the wiki.
 
 Example usage:
 
@@ -20,39 +21,38 @@ Example usage:
 
 which generates a C file to standard output.
 
-You may also use the shell script "lua2c" to compile Lua->C->machine
+You may also use the shell script "clua" to compile Lua->C->machine
 code and execute all in one step.  However, you may need to edit the
-variables in the file to match your system.
+variables in the file to match your system.  This utility invokes the
+C compiler.
+
+  clua test/bisect.lua
 
 This project reuses Metalua's gg/mlp parser to convert Lua source to a
 Metalua-style[1] AST over which the compiler then operates.  gg/mlp is
-written in pure Lua, and a patched gg/mlp from metalua-0.4.1-rc1 is
-bundled in the distribution.  lua2c does not otherwise depend on
-Metalua.
+bundled in the distribution (patched metalua-0.4.1-rc1) and is written
+in pure Lua, so no build/install is needed.  lua2c does not require
+Metalua itself.
 
 == Related Work ==
 
-  * luatoc - This related effort Hisham Muhammad[2] converts Lua
+  * luac2c - This related effort Hisham Muhammad[2] converts Lua
     bytecodes to C source, whereas this project converts Lua
-    source to C source.  lua2c will likely run into similar
-    limitations (see above).  (Note: The names lua2c and luatoc
-    may cause some confusion, though luatoc has remained
-    somewhat experimental, and the name lua2c is quite
-    descriptive of what this does.  The names might change, but
-    for now, if in doubt, you can refer to this as my version or
-    the version that converts from Lua source rather than Lua
-    bytecode and give the URL.)
+    source to C source.  luac2c runs into a few similar
+    limitations as given above.  luac2c has remained experimental.
+    It superseded Luiz Henrique De Figueiredo's very basic but
+    similarly named lua2c for Lua 4.0.[3]
 
-  * luagen++[3] uses C++ expression templates to translate
+  * luagen++[4] uses C++ expression templates to translate
     Lua-like C++ statements to C API calls.  The code generation
     structure is actually fairly similar to lua2c.
 
-  * Python Pyrex[4] does something similar in Python but has the
+  * Python Pyrex[5] does something similar in Python but has the
     added goal of lowering the boundary between C and Python
     code.  Something like that could be done with lua2c,
     especially since lua2c uses the extensible gg parser.
 
-  * Clue by David Given[5] does the opposite: convert C source
+  * Clue by David Given[6] does the opposite: convert C source
     to Lua source.
 
 == Potential Uses ==
@@ -84,26 +84,24 @@ See warnings/limitations above.  I think this project (besides being
 theoretically nice to have) has a number of potential uses and should
 be completed, though personally I'm not necessarily committed to doing
 so.  Please dig into the code and post patches if you are so inclined.
-There's aren't many comments--this was quickly patched together.  The
-comments in LuaGenPlusPlus may be instructive (then again, the C++
-expression template code may just serve to further confuse).
 
 Once the code is complete/robust, more attention can be given to
 optimizing the code generation.
 
 == Project Page ==
 
-Is currently http://lua-users.org/wiki/LuaToCee
+The project page is currently http://lua-users.org/wiki/LuaToCee .
 
 == Licensing ==
 
-(c) 2008 DavidManura.  Licensed under the same terms as Lua (MIT
+(c) 2008 David Manura.  Licensed under the same terms as Lua (MIT
 license).  See included LICENSE file for full licensing details.
 
 == References ==
 
-  * [1] http://metalua.luaforge.net/manual006.html#toc17
-  * [2] LuaList:2006-07/msg00144.html
-  * [3] LuaGenPlusPlus
-  * [4] http://www.cosc.canterbury.ac.nz/greg.ewing/python/Pyrex/
-  * [5] http://cluecc.sourceforge.net/
+  * [1] Metalua AST - http://metalua.luaforge.net/manual006.html#toc17
+  * [2] luac2c (previously named luatoc) - LuaList:2006-07/msg00144.html
+  * [3] LHF's lua2c for Lua 4.0 - LuaList:2002-01/msg00296.html
+  * [4] luagen++ - LuaGenPlusPlus
+  * [5] Pyrex - http://www.cosc.canterbury.ac.nz/greg.ewing/python/Pyrex/
+  * [6] Clue - http://cluecc.sourceforge.net/
