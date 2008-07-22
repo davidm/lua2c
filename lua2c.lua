@@ -5,6 +5,14 @@
 -- A few things (upvalues/coroutines/tail calls) might remain
 -- unimplemented--see README file file for details.
 --
+-- FIX: NOT YET IMPLEMENTED:
+--  - FIX: a,b = f()
+--  - old style vararg (arg) table inside vararg functions
+--    (LUA_COMPAT_VARARG)
+--  - upvalues?
+--  - coroutines?
+--  - tail calls?
+--
 -- (c) 2008 David Manura.  Licensed under the same terms as Lua (MIT license).
 
 package.path = package.path .. ';./lib/?.lua'
@@ -77,7 +85,9 @@ local idxtop = 0
 -- Maps name -> stack index
 local localvars = {}
 
-
+-- Information on function currently being compiled.
+local funcinfo = {is_vararg=false, nformalparams=0,
+  is_lc_nextra_used=false, is_lc_nactualargs_used=false}
 
 -- Builds set from elements in array t.
 local function makeset(t)
@@ -203,12 +213,27 @@ end
 local C = setmetatable({}, C_mt)
 
 
+-- Gets index of local var.  Adjusts absolute index of local variable,
+-- given that in vararg (...) functions, base index depends on
+-- arguments passed in.  Can return C AST.
+local function localidx(name)
+  local idx = localvars[name]
+  if not idx then return end
+
+  if funcinfo.is_vararg and idx > funcinfo.nformalparams then
+    idx = C.Op('+', idx, C.Id'lc_nextra')
+    funcinfo.is_lc_nextra_used = true
+  end
+  return idx
+end
+
 
 -- Adjusts stack index to relative (negative) position offset.  note:
 -- use only when values inside offset are on the stack
--- (non-psuedoindices)
+-- (non-psuedoindices).
+-- Note: allows C AST.
 local function adjustidx(offset, idx)
-  if idx > 0 then
+  if type(idx) == 'table' or idx > 0 then
     return idx
   else -- relative stack index or pseudoindex
      -- FIX:pseudoindices not supported
@@ -217,12 +242,13 @@ local function adjustidx(offset, idx)
 end
 
 -- Adjusts relative stack indicies
+-- Note: allows C ASTs.
 local function adjustidxs(...)
   local nused = 0
   local result = {...}
   for i=#result,1,-1 do
     local idx = result[i]
-    if idx < 0 then  --FIX: and idx > LUA_REGISTRYINDEX ?
+    if type(idx) ~= 'table' and idx < 0 then  --FIX: and idx > LUA_REGISTRYINDEX ?
       result[i] = result[i] - nused
     end
     if idx == -1 then
@@ -301,6 +327,15 @@ local function newscope()
   local localvars_old = localvars
   local localvars = {}
   return setmetatable(localvars, {__index = localvars_old})
+end
+
+
+-- Returns whether expression could possibly return a number of argument
+-- different from 1.
+-- note: expr_ast can be nil
+local function can_multi(expr_ast)
+  return expr_ast and (expr_ast.tag == 'Call' or expr_ast.tag == 'Invoke'
+                       or expr_ast.tag == 'Dots')
 end
 
 
@@ -524,6 +559,76 @@ local function gennotop(ast, where)
 end
 
 
+local function genlenop(ast, where)
+  local opid, a_ast = ast[1], ast[2]
+
+  local cast = cexpr()
+  local a_idx = cast:append(genexpr(a_ast, 'anywhere')).idx
+
+  --FIX:call metatable __len for userdata?
+  local id = nextid()
+  cast:append(C.LetDouble(id, C.lua_objlen(a_idx)))
+  cast:append(C.lua_pop(1))
+  cast:append(C.lua_pushnumber(C.Id(id)))
+  return cast
+end
+
+
+
+local function genunmop(ast, where)
+  -- Returns C AST node definition of op.
+  local function makeop()
+    local ccode = [[
+/* __unm metamethod handler.
+ * warning: assumes indices in range LUA_REGISTRYINDEX < x < 0 are relative. */
+static double lc_unm(lua_State * L, int idxa) {
+  if (lua_isnumber(L,idxa)) {
+    return - lua_tonumber(L, idxa);
+  }
+  else {
+    if (luaL_getmetafield(L,idxa,"__unm")) {
+      lua_pushvalue(L,idxa < 0 && idxa > LUA_REGISTRYINDEX ? idxa-1 : idxa);
+      lua_call(L,1,1);
+      const double result = lua_tonumber(L,-1);
+      lua_pop(L,1);
+      return result;
+    }
+    else {
+      return luaL_error(L, "attempt to perform arithmetic");
+    }
+  }
+}
+]]
+    return C.C(ccode)
+  end
+
+  local opid, a_ast = ast[1], ast[2]
+  assert(opid == 'unm')
+
+  local cast = cexpr()
+
+  local fname = "lc_" .. opid
+  if not is_created[fname] then
+    append_array(cast.pre, {makeop()})
+    is_created[fname] = true
+  end
+
+  local a_idx = cast:append(genexpr(a_ast, 'anywhere')).idx
+  local nstack = countstack(a_idx)
+  a_idx = adjustidxs(a_idx)
+  if nstack == 0 then
+    cast:append(C.lua_pushnumber(C.CallL('lc_'..opid, a_idx)))
+  else
+    local id = nextid()
+    cast:append(C.LetDouble(id, C.CallL('lc_'..opid, a_idx)))
+    cast:append(C.lua_pop(nstack))
+    cast:append(C.lua_pushnumber(C.Id(id)))
+  end
+
+  return cast
+end
+
+
 local function genconcatop(ast, where)
   local a_ast, b_ast = ast[2], ast[3]
   local cast = cexpr()
@@ -535,11 +640,18 @@ local function genconcatop(ast, where)
   return cast
 end
 
-local function genfunction(ast, where)
-  local params_ast, body_ast = ast[1], ast[2]
-  local cast = cexpr()
 
-  --## generate function definition
+-- helper function to generate function definition
+local function genfunctiondef(ast)
+  local params_ast, body_ast = ast[1], ast[2]
+
+  -- localize new function info.
+  local funcinfo_old = funcinfo
+  local has_vararg = params_ast[#params_ast]
+                     and params_ast[#params_ast].tag == 'Dots'
+  local nformalargs = #params_ast - (has_vararg and 1 or 0)
+  funcinfo = {is_vararg = has_vararg, nformalparams = nformalargs,
+    is_lc_nextra_used = false, is_lc_nactualargs_used=false}
 
   -- localize code
   local localvars_save = localvars  --FIX:how to handle upvalues?
@@ -547,32 +659,91 @@ local function genfunction(ast, where)
   idxtop = 0   -- FIX: currently assuming no upvalues
   localvars = {}
 
+  -- define parameters as local variables.
   for i,var_ast in ipairs(params_ast) do
-    assert(var_ast.tag ~= 'Dots', 'FIX:NOT IMPL: dots ...')
-    assert(var_ast.tag == 'Id')
-    local varname = var_ast[1]
-    localvars[varname] = i
-    idxtop = idxtop + 1
+    if var_ast.tag ~= 'Dots' then
+      assert(var_ast.tag == 'Id')
+      local varname = var_ast[1]
+      localvars[varname] = i
+      idxtop = idxtop + 1
+    end
   end
 
-  local body_cast = cexpr(); body_cast.pre = cast.pre
-  local id = nextid() .. '_func'  -- IMPROVE: deduce function name
-  body_cast:append(genblock(body_ast))
+  local body_cast = cexpr()
+
+  local body2_cast = genblock(body_ast)
+
+  -- note: safety in case caller passes more or less arguments
+  -- than parameters.  IMPROVE-some of this is sometimes not necessary.
+  body_cast:append(C.Enum('lc_nformalargs', nformalargs))
+  if #params_ast > 0 and params_ast[#params_ast].tag == 'Dots' then
+    if nformalargs > 0 then
+      body_cast:append(
+        C.If(C.Op('<', C.lua_gettop(), C.Id'lc_nformalargs'),
+          { C.lua_settop(C.Id'lc_nformalargs') } ))
+    end
+    -- note: measure nactualargs after adjustment above
+    -- (important for genexpr of `Id)
+    if funcinfo.is_lc_nextra_used then
+      funcinfo.is_lc_nactualargs_used = true
+    end
+    if funcinfo.is_lc_nactualargs_used then
+      body_cast:append(C.LetInt('lc_nactualargs', C.lua_gettop()))
+    end
+    if funcinfo.is_lc_nextra_used then
+      body_cast:append(C.LetInt('lc_nextra',
+        C.Op('-', C.Id'lc_nactualargs', C.Id'lc_nformalargs')))
+    end
+  else
+    body_cast:append(C.lua_settop(#params_ast))
+  end
+
+  --FIX:check for stack overflow / lua_checkstack
+
+  -- generate body
+  body_cast:append(body2_cast)
   if #body_ast > 0 and body_ast[#body_ast].tag ~= 'Return' then
     body_cast:append(C.Return(0))
   end
-  local def_cast = C.Functiondef(id, body_cast)
-  def_cast.comment = getlines(src, linerange(ast))
-  append_array(cast.pre, {def_cast})
+
+  local id = ast.is_main and 'lc_main'
+             or nextid() .. '_func'  -- IMPROVE: deduce function name
+  local def_cast = cexpr()
+  append_array(def_cast, body_cast.pre)
+  local func_cast = C.Functiondef(id, body_cast)
+  func_cast.comment = getlines(src, linerange(ast))
+  func_cast.id = id
+  append_array(def_cast, { func_cast })
 
   localvars = localvars_save
   idxtop = idxtop_old
 
+  funcinfo = funcinfo_old
+
+  return def_cast
+end
+
+
+local function genfunction(ast, where)
+  local cast = cexpr()
+
+  --## generate function definition
+  local def_cast = genfunctiondef(ast)
+  append_array(cast.pre, def_cast)
+
   --## generate function object
-  cast:append(C.lua_pushcfunction(C.Id(id)))
+  cast:append(C.lua_pushcfunction(C.Id(def_cast[#def_cast].id)))
 
   return cast
 end
+
+
+local function genmainchunk(ast)
+  local astnew = {tag='Function', is_main=true, {{tag='Dots'}}, ast}
+
+  return genfunctiondef(astnew)
+end
+
 
 local function gentable(ast, where)
   local cast = cexpr()
@@ -592,61 +763,82 @@ local function gentable(ast, where)
   end
 
   local pos = 0
-  for _,e_ast in ipairs(ast) do
+  for i,e_ast in ipairs(ast) do
     if e_ast.tag == 'Pair' then
       local k_ast, v_ast = e_ast[1], e_ast[2]
       cast:append(genexpr(k_ast, 'onstack'))
       cast:append(genexpr(v_ast, 'onstack'))
       cast:append(C.lua_rawset(-3))
     else
-      cast:append(genexpr(e_ast, 'onstack'))
-      pos = pos + 1
-      cast:append(C.lua_rawseti(-2, pos))
+      local can_multret = i == #ast and can_multi(e_ast)
+
+      if can_multret then
+        -- table marker
+        local id = nextid()
+        cast:append(C.Let(id, C.lua_gettop()))
+
+        -- get list of values
+        cast:append(genexpr(e_ast, 'onstack', 'multret'))
+
+        -- push list of values in table.
+        -- note: Lua spec does not prohibit right-to-left insertion.
+        -- IMPROVE? right-to-left insertion can cause needless placement
+        -- of values into the hash part of the table.
+        cast:append(
+          C.While(C.Op('>', C.lua_gettop(), C.Id(id)), {
+            C.lua_rawseti(C.Id(id),
+              C.Op('+', pos, C.Op('-', C.lua_gettop(), C.Id(id)))) } ))
+      else
+        cast:append(genexpr(e_ast, 'onstack'))
+        pos = pos + 1
+        cast:append(C.lua_rawseti(-2, pos))
+      end
     end
   end
   return cast
 end
 
 local function gencall(ast, where, nret)
-  local isinvoke = ast.tag == 'Invoke'
-  local iarg = isinvoke and 3 or 2
+  local isinvoke = ast.tag == 'Invoke'  -- method call
+
   local cast = cexpr()
 
   -- whether last argument might possibly return multiple values
-  local can_multret = #ast >= iarg and
-    (ast[#ast].tag == 'Call' or ast[#ast].tag == 'Invoke')
+  local can_multret = can_multi(ast[#ast])
 
-  local id
-  local function f()
-    if can_multret then
-      id = nextid(); cast:append(C.Let(id, C.lua_gettop()))
-    end
-  end
-
+  -- push function
   if isinvoke then
-    local expr_ast, name_ast = ast[1], ast[2]  -- ...
-    cast:append(genexpr(expr_ast, 'onstack'))
-    f()
-    cast:append(genexpr(name_ast, 'onstack'))
-    cast:append(C.lua_gettable(-2))
-    cast:append(C.lua_insert(-2))
+    local obj_ast = ast[1]
+    cast:append(genexpr(obj_ast, 'onstack')) -- actually self
   else
     assert(ast.tag == 'Call')
     local f_ast = ast[1]
     cast:append(genexpr(f_ast, 'onstack'))
-    f()
   end
 
-  for i=iarg,#ast do
-    local ast2 = ast[i]
-    cast:append(genexpr(ast2, 'onstack', i == #ast and 'multret' or false))
+  -- argument marker
+  local id
+  if can_multret then
+    id = nextid(); cast:append(C.Let(id, C.lua_gettop()))
+  end
+
+  -- push arguments
+  for i=2,#ast do
+    if i == 2 and isinvoke then
+      local methodname_ast = ast[i]
+      cast:append(genexpr(methodname_ast, 'onstack'))
+      cast:append(C.lua_gettable(-2))
+      cast:append(C.lua_insert(-2))  -- swap self and function
+    else
+      cast:append(genexpr(ast[i], 'onstack', i == #ast and 'multret' or false))
+    end
   end
   local narg = can_multret and C.Op('-', C.lua_gettop(), C.Id(id)) or #ast-1
-  if nret == 'multret' then
-    cast:append(C.lua_call(narg, C.C'LUA_MULTRET'))
-  else
-    cast:append(C.lua_call(narg, nret or 1))
-  end
+
+  -- call
+  cast:append(C.lua_call(narg,
+    nret == 'multret' and C.C'LUA_MULTRET' or nret or 1))
+
   return cast
 end
 
@@ -659,6 +851,12 @@ function genexpr(ast, where, nret)
   if ast.tag == 'Nil' then
     return cexpr(C.lua_pushnil())
   elseif ast.tag == 'Dots' then
+    if nret == 'multret' then
+      funcinfo.is_lc_nactualargs_used = true
+      return cexpr(C.C[[{int i; for (i=lc_nformalargs+1; i<=lc_nactualargs; i++) { lua_pushvalue(L, i); }}]])
+    else
+      return cexpr(C.lua_pushvalue(C.Op('+', C.Id'lc_nformalargs', 1)));
+    end
     assert(false, 'FIX:NOT IMPL: dots ...')
   elseif ast.tag == 'True' then
     return cexpr(C.lua_pushboolean(1))
@@ -694,8 +892,12 @@ function genexpr(ast, where, nret)
     elseif is_unopid[opid] then
       if opid == 'not' then
         return gennotop(ast, where)
+      elseif opid == 'len' then
+        return genlenop(ast, where)
+      elseif opid == 'unm' then
+        return genunmop(ast, where)
       else
-        error('FIX:NOT-IMPL:' .. opid)
+        assert(false, opid)
       end
     else
       assert(false, opid)
@@ -710,7 +912,7 @@ function genexpr(ast, where, nret)
     local name = ast[1]
     local cast = cexpr()
     if localvars[name] then -- local
-      local idx = localvars[name]
+      local idx = localidx(name)
       if where == 'anywhere' then
         cast.idx = idx
         return cast
@@ -742,7 +944,7 @@ local function genlvalueassign(l_ast)
   if l_ast.tag == 'Id' then
     local name = l_ast[1]
     if localvars[name] then
-      local l_idx = localvars[name]
+      local l_idx = localidx(name)
       cast:append(C.lua_replace(l_idx))
     else  -- global
       cast:append(C.lua_setglobal(name))
@@ -768,33 +970,35 @@ local function genif(ast)
   local cast = cexpr()
   local if_args = {pre=cast.pre}
 
-  local a_idx = cast:append(genexpr(ast[1], 'anywhere')).idx
-  if a_idx ~= -1 then
-    if_args[1] = C.lua_toboolean(a_idx)
-  else
-    local id = nextid();
-    cast:append(C.Let(id, C.lua_toboolean(-1)))
-    cast:append(C.lua_pop(1))
-    if_args[1] = C.Id(id)
-  end
+  for i=2,#ast,2 do
+    local expr_ast, body_ast = ast[i-1], ast[i]
 
-  local localvars_save = localvars
-  localvars = newscope()
-  local block_cast = genblock(ast[2])
-  table.insert(if_args, block_cast)
-  append_array(cast.pre, block_cast.pre)
-  localvars = localvars_save
+    -- expression
+    local a_idx = cast:append(genexpr(expr_ast, 'anywhere')).idx
+    if a_idx ~= -1 then
+      if_args[#if_args+1] = C.lua_toboolean(a_idx)
+    else
+      local id = nextid();
+      cast:append(C.Let(id, C.lua_toboolean(-1)))
+      cast:append(C.lua_pop(1))
+      if_args[#if_args+1] = C.Id(id)
+    end
 
-  if #ast == 2 then
-  elseif #ast == 3 then
+    -- block
     local localvars_save = localvars
     localvars = newscope()
-    local block_cast = genblock(ast[3])
+    local block_cast = genblock(body_ast)
     table.insert(if_args, block_cast)
     append_array(cast.pre, block_cast.pre)
     localvars = localvars_save
-  else
-    assert(false, 'FIX:NOT IMPL: elseif')
+  end
+  if #ast % 2 == 1 then
+    local localvars_save = localvars
+    localvars = newscope()
+    local block_cast = genblock(ast[#ast])
+    table.insert(if_args, block_cast)
+    append_array(cast.pre, block_cast.pre)
+    localvars = localvars_save
   end
 
   cast:append(C.If(unpack(if_args)))
@@ -873,13 +1077,6 @@ local function genfornum(ast)
   return cast
 end
 
--- Returns whether expression could possibly return a number of argument
--- different from 1.
--- note: expr_ast can be nil
-local function can_multi(expr_ast)
-  return expr_ast and (expr_ast.tag == 'Call' or expr_ast.tag == 'Invoke')
-end
-
 
 -- Converts Lua `Forin AST to C AST.
 local function genforin(ast)
@@ -953,9 +1150,9 @@ local function genwhile(ast)
   local id = nextid(); cast:append(C.Let(id, C.lua_gettop()))
 
   do
+    -- expression
     local block_cast = cexpr()
     local expr_idx = block_cast:append(genexpr(expr_ast, 'anywhere')).idx
-
     block_cast:append(
       C.If(C.Not(C.lua_toboolean(expr_idx)),
            expr_idx == -1 and {C.lua_pop(1), C.Break()} or {C.Break()}))
@@ -964,11 +1161,50 @@ local function genwhile(ast)
     -- local scope to evaluate block
     local localvars_save = localvars
     localvars = newscope()
-    localvars = localvars_save
+
+    -- block
     block_cast:append(C.lua_settop(C.Id(id)))
     block_cast:append(genblock(block_ast))
+
     cast:append(C.While(1, block_cast))
     append_array(cast.pre, block_cast.pre)
+
+    localvars = localvars_save
+  end
+
+  cast:append(C.lua_settop(C.Id(id)))
+  return cast
+end
+
+
+-- Converts Lua `Repeat AST to C AST.
+local function genrepeat(ast)
+  local block_ast, expr_ast = ast[1], ast[2]
+  local cast = cexpr()
+  local id = nextid(); cast:append(C.Let(id, C.lua_gettop()))
+
+  do
+    -- local scope to evaluate block and expression
+    local localvars_save = localvars
+    localvars = newscope()
+
+    -- body
+    local block_cast = cexpr()
+    block_cast:append(C.lua_settop(C.Id(id)))
+    block_cast:append(genblock(block_ast))
+
+    -- expression
+    local expr_idx = block_cast:append(genexpr(expr_ast, 'anywhere')).idx
+    block_cast:append(
+      C.If(C.lua_toboolean(expr_idx),
+           expr_idx == -1 and {C.lua_pop(1), C.Break()} or {C.Break()}))
+    block_cast:append(C.lua_pop(1))
+
+    cast:append(C.While(1, block_cast))
+    append_array(cast.pre, block_cast.pre)
+
+
+    localvars = localvars_save
   end
 
   cast:append(C.lua_settop(C.Id(id)))
@@ -1037,9 +1273,7 @@ local function genstatement(stat_ast)
     end
   elseif stat_ast.tag == 'Return' then
     cast = cexpr()
-    local can_multi = #stat_ast >= 1 and
-      (stat_ast[#stat_ast].tag == 'Call' or
-       stat_ast[#stat_ast].tag == 'Invoke')
+    local can_multi = #stat_ast >= 1 and can_multi(stat_ast[#stat_ast])
     local id
     if can_multi then
       id = nextid(); cast:append(C.Let(id, C.lua_gettop()))
@@ -1059,16 +1293,17 @@ local function genstatement(stat_ast)
     cast = genforin(stat_ast)
   elseif stat_ast.tag == 'While' then
     cast = genwhile(stat_ast)
+  elseif stat_ast.tag == 'Repeat' then
+    cast = genrepeat(stat_ast)
   elseif stat_ast.tag == 'Do' then
     cast = gendo(stat_ast)
   elseif stat_ast.tag == 'If' then
     cast = genif(stat_ast)
   elseif stat_ast.tag == 'Call' or stat_ast.tag == 'Invoke' then
     cast = genexpr(stat_ast, 'onstack', 0)
-  elseif stat_ast.tag == 'Local' then
+  elseif stat_ast.tag == 'Local' or stat_ast.tag == 'Localrec' then
     cast = genlocalstat(stat_ast)
-  elseif stat_ast.tag == 'Localrec' then
-    assert(false, 'FIX: Localrec NOT IMPL')
+    --FIX: Localrec requires upvalue.
   elseif stat_ast.tag == 'Break' then
     cast = cexpr(C.Break()) --FIX: if any cleanup on scope exit needed
   else
@@ -1099,14 +1334,6 @@ local function gendefinitions(ast)
   return cast
 end
 
-local function genmainchunk(ast)
-  local cast = cexpr()
-  local cast_block = genblock(ast)
-  cast_block:append(C.Return(0))
-  append_array(cast, cast_block.pre)
-  cast:append(C.Functiondef('luamain', cast_block))
-  return cast
-end
 
 local function genfull(ast)
 
@@ -1161,7 +1388,7 @@ typedef struct {
 
   cast:append(C.C [[
 /* create global arg table */
-static void lc_createarg(lua_State * L, lc_args_t * args) {
+static void lc_createarg(lua_State * L, const lc_args_t * const args) {
   int i;
   lua_newtable(L);
   for (i=0; i < args->c; i++) {
@@ -1176,11 +1403,16 @@ static void lc_createarg(lua_State * L, lc_args_t * args) {
 static int lc_pmain(lua_State * L) {
   luaL_openlibs(L);
 
-  lc_createarg(L, (lc_args_t*)lua_touserdata(L, 1));
+  const lc_args_t * const args = (lc_args_t*)lua_touserdata(L, 1);
+  lc_createarg(L, args);
 
   lua_pushcfunction(L, traceback);
-  lua_pushcfunction(L, luamain);
-  int status = lua_pcall(L, 0, 0, -2);
+  lua_pushcfunction(L, lc_main);
+  int i;
+  for (i=1; i < args->c; i++) {
+    lua_pushstring(L, args->v[i]);
+  }
+  int status = lua_pcall(L, args->c-1, 0, -2);
   if (status != 0) {
     fputs(lua_tostring(L,-1), stderr);
   }
@@ -1226,6 +1458,7 @@ end
 -- Makes C comment of string s.
 local function ccomment(s)
   s = s:gsub('%*%/', '* /')
+  s = s:gsub('%/%*', '/ *')
   s = '/* ' .. s:gsub('\n', '\n' .. ' * ') .. ' */'
   return s
 end
@@ -1252,7 +1485,7 @@ local function cast_tostring(cast)
     end
   elseif cast.tag == 'C' or cast.tag == 'Id' then
     local ccode = cast[1]
-    assert(type(ccode) == 'string')
+    assert(type(ccode) == 'string', tostring(ccode))
     return ccode
   elseif cast.tag == 'Op' then
     local opid, a_cast, b_cast = cast[1], cast[2], cast[3]
@@ -1268,6 +1501,12 @@ local function cast_tostring(cast)
   elseif cast.tag == 'LetMutableDouble' then
     local id, val_cast = cast[1], cast[2]
     return "double " .. id .. " = " .. cast_tostring(val_cast)
+  elseif cast.tag == 'LetInt' then
+    local id, val_cast = cast[1], cast[2]
+    return "const int " .. id .. " = " .. cast_tostring(val_cast)
+  elseif cast.tag == 'Enum' then
+    local id, val_cast = cast[1], cast[2]
+    return "enum { " .. id .. " = " .. cast_tostring(val_cast) .. " }"
   elseif cast.tag == 'Not' then
     local a_ast = cast[1]
     local pa,pz = '(', ')'  -- improve: sometimes can be avoided
