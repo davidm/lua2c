@@ -3,17 +3,17 @@ lua2c - converts Lua source code to C code.
 == Description ==
 
 This utility converts a given Lua source file into an equivalent C
-source file containing Lua C API calls.  At least, this will be true
-for a large subset of the Lua language (see limitations below).  The
+source file containing Lua C API calls.  At least, this is true for a
+large subset of the Lua language (see limitations below).  The
 compiler is written entirely in Lua.
 
 WARNING: This code is in development and should be considered
-experimental.  It does successfully convert many of Lua's examples
-(e.g. "bisect.lua") but fails on the examples that use features
-identified in the limitations.  It is not currently well tested, so
-dig into the code, fix anything that's broken or not implemented, and
-post the patch here. This code can be made robust for a large subset
-of Lua.  Please report bugs/patches on the wiki.
+experimental.  It does successfully convert many of Lua's examples and
+passes most of the Lua 5.1 test suite, but it fails on the examples
+that use features identified in the limitations.  Some errors remain,
+so dig into the code, fix anything that's broken or not implemented,
+and post the patch. This code can be made robust for a large subset of
+Lua.  Please report bugs/patches on the wiki.
 
 Example usage:
 
@@ -73,17 +73,20 @@ Metalua itself.
 
 == Limitations ==
 
-lua2c does not currently (and might not ever) properly support
-coroutines, upvalues, tail calls, functions that reject C functions
-(e.g. setfenv), etc.  These don't have the exact analogue in C.
-However, some solutions might be explored.
+lua2c does not currently support coroutines, tail call optimizations,
+and functions that normally reject C functions (e.g. setfenv).
+These don't have the exact analogue in C.  Coroutines might not ever
+be supported. However, some solutions might be explored (Coco or
+simulating coroutines in C with a lot of ugly code).
+
+Closures and upvalues are implemented, but creating and accessing
+upvalues is somewhat slow.
 
 == Status ==
 
 See warnings/limitations above.  I think this project (besides being
-theoretically nice to have) has a number of potential uses and should
-be completed, though personally I'm not necessarily committed to doing
-so.  Please dig into the code and post patches if you are so inclined.
+theoretically nice to have) has a number of potential uses.  Please
+dig into the code and post patches if you are so inclined.
 
 Once the code is complete/robust, more attention can be given to
 optimizing the code generation.

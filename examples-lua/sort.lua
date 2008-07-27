@@ -5,7 +5,6 @@
 function qsort(x,l,u,f)
  if l<u then
   local m=math.random(u-(l-1))+l-1	-- choose a random pivot in range l..u
-print(m)
   x[l],x[m]=x[m],x[l]			-- swap pivot to first position
   local t=x[l]				-- pivot value
   m=l
