@@ -3,7 +3,7 @@
 LUA=lua
 CC=gcc
 #CFLAGS=-g
-CFLAGS="-O2 -Wall -Ilua/src"
+CFLAGS="-O2 -DNDEBUG -Wall -Ilua/src"
 LFLAGS="-Llua/src -llua"
 
 LUAFILE=$1

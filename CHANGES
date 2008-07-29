@@ -1,3 +1,8 @@
+2008-07-29
+  optimized locals not used as upvalues
+  fixed numeric break stack bug
+  fixed bug in length (#) op for non-temporary object
+
 2008-07-26
   implemented closures/upvalues.  note: in this initial stage,
     all locals are implemented as upvalues, which is slow

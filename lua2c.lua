@@ -6,8 +6,6 @@
 -- unimplemented--see README file file for details.
 --
 -- FIX: NOT YET IMPLEMENTED:
---  - a significant performance increase can be obtained by not
---    storing in the closure table locals that are not used as upvalues
 --  - more comprehensive lua_checkstack accounting
 --  - old style vararg (arg) table inside vararg functions
 --    (LUA_COMPAT_VARARG)
@@ -19,8 +17,6 @@
 
 package.path = package.path .. ';./lib/?.lua'
 
---FIX:IMPROVE--automatically and selectively detect variables for closure.
-local enable_closures = true
 
 -- gg/mlp Lua parsing Libraries from Metalua.
 require "lexer"
@@ -253,11 +249,11 @@ local function realidx(idx)
   then
     return idx
   end
-  local idxreal = enable_closures and tag(idx) == 'Upval' and idx[1] or idx
+  local idxreal = tag(idx) == 'Upval' and idx[1] or idx
   if funcinfo.is_vararg and
      (tag(idxreal) == 'Id' or idxreal > funcinfo.nformalparams)
   then
-    if enable_closures and tag(idx) == 'Upval' then
+    if tag(idx) == 'Upval' then
       idx = {tag='Upval', C.Op('+', idxreal, C.Id'lc_nextra'), idx[2], idx[3]}
       funcinfo.is_lc_nextra_used = true
     else
@@ -672,7 +668,9 @@ local function genlenop(ast, where)
   --FIX:call metatable __len for userdata?
   local id = nextid()
   cast:append(C.LetDouble(id, C.lua_objlen(a_idx)))
-  cast:append(C.lua_pop(1))
+  if a_idx == -1 then
+    cast:append(C.lua_pop(1))
+  end
   cast:append(C.lua_pushnumber(C.Id(id)))
   return cast
 end
@@ -776,6 +774,11 @@ static void lc_newclosuretable(lua_State * L, int idx) {]])
 
   local id = nextid()
   cast:append(C.Enum(id, idxtop))
+  if not is_created['assert.h'] then
+    append_array(cast.pre, {C.Include'<assert.h>'})
+    is_created['assert.h'] = true
+  end
+  cast:append(C.Call('assert', C.Op('==', C.lua_gettop(), realidx(C.Id(id)))))
 
   cast.idx = C.Id(id)
 
@@ -820,20 +823,28 @@ local function genfunctiondef(ast, ismain)
 
   local body_cast = cexpr()
 
-  if enable_closures and nformalargs > 0 then
+  local is_upvalue = false
+  for i,params_ast in ipairs(params_ast) do
+    is_upvalue = is_upvalue or params_ast.upvalue
+  end
+  if is_upvalue then
     local ct_idx = body_cast:append(gennewclosuretable()).idx
     activate_closure_table(ct_idx)
 
     for i=1,nformalargs do
-      local varid = nextvarid()
-      local name = params_ast[i][1]
+      local param_ast = params_ast[i]
 
-      -- create local symbol
-      currentscope[name] =
-        {tag='Upval', idxtop, currentscope['.closurelevel'], varid}
+      if param_ast.upvalue then
+        local name = param_ast[1]
+        local varid = nextvarid()
 
-      body_cast:append(C.lua_pushvalue(i))
-      body_cast:append(C.lua_rawseti(-2, varid))
+        -- create local symbol
+        currentscope[name] =
+          {tag='Upval', idxtop, currentscope['.closurelevel'], varid}
+
+        body_cast:append(C.lua_pushvalue(i))
+        body_cast:append(C.lua_rawseti(-2, varid))
+      end
     end
   end
 
@@ -914,7 +925,7 @@ local function genfunction(ast, where)
   append_array(cast.pre, def_cast)
 
   --## generate function object
-  if enable_closures then
+  if ast.uses_upvalue then
     cast:append(C.lua_pushvalue(get_closuretableidx_cast()))
     cast:append(C.lua_pushcclosure(C.Id(def_cast[#def_cast].id), 1))
   else
@@ -1058,8 +1069,9 @@ static void lc_setupvalue(lua_State * L, int tidx, int level, int varid) {
 end
 
 -- helper
-local function gen_lc_getupvalue(...)
-  local cast = cexpr(C.CallL('lc_getupvalue', ...))
+local function gen_lc_getupvalue(tidx, level, varid)
+  assert(tidx and level and varid)
+  local cast = cexpr(C.CallL('lc_getupvalue', tidx, level, varid))
   if not is_created['lc_getupvalue'] then
     append_array(cast.pre, {C.C[[
 /* gets upvalue with ID varid by consulting upvalue table at index
@@ -1176,7 +1188,7 @@ function genexpr(ast, where, nret)
     local cast = cexpr()
     if currentscope[name] then -- local
       local idx = localidx(name)
-      if enable_closures and tag(idx) == 'Upval' then
+      if tag(idx) == 'Upval' then
         local closuretable_idx, closurelevel, varid = idx[1], idx[2], idx[3]
         cast:append(gen_lc_getupvalue(
           get_closuretableidx_cast(),
@@ -1215,7 +1227,7 @@ local function genlvalueassign(l_ast)
     local name = l_ast[1]
     if currentscope[name] then
       local idx = localidx(name)
-      if enable_closures and type(idx) == 'table' and idx.tag == 'Upval' then
+      if tag(idx) == 'Upval' then
         local closuretable_idx, closurelevel, varid = idx[1], idx[2], idx[3]
         cast:append(gen_lc_setupvalue(
           get_closuretableidx_cast(),
@@ -1351,10 +1363,12 @@ local function genfornum(ast)
 
   local block_cast = cexpr()
 
-  local idx_1 = idxtop
+  local base_idx = idxtop
+  local base_id = nextid()
+  cast:append(C.Enum(base_id, base_idx))
 
   -- create local
-  if enable_closures then
+  if name_ast.upvalue then
     local ct_idx = block_cast:append(gennewclosuretable()).idx
     activate_closure_table(ct_idx)
 
@@ -1373,13 +1387,18 @@ local function genfornum(ast)
 
   block_cast:append(genblock(block_ast))
 
-  restorestackrel(block_cast, idx_1)
+  restorestackrel(block_cast, base_idx)
   restorescope(currentscope_save)
 
   block_cast:append(C.C(var_id .. ' += ' .. step_id .. ';')) --IMPROVE?
 
   cast:append(C.While(while_expr_cast, block_cast))
   append_array(cast.pre, block_cast.pre)
+
+  -- note: mixed breaks and locals can leave the stack at an
+  -- unknown size, so absolute adjust here.
+  restorestackabs(cast, C.Id(base_id), base_idx)
+
   return cast
 end
 
@@ -1414,7 +1433,12 @@ local function genforin(ast)
     local currentscope_save = newscope()
     local extra = 0
     local ct_idx
-    if enable_closures then
+
+    local is_upvalue = false
+    for i,name_ast in ipairs(names_ast) do
+      if name_ast.upvalue then is_upvalue = true end
+    end
+    if is_upvalue then
       ct_idx = block_cast:append(gennewclosuretable()).idx
       activate_closure_table(ct_idx)
       extra = 1
@@ -1434,27 +1458,51 @@ local function genforin(ast)
     block_cast:append(C.lua_pushvalue(- #names_ast))
     block_cast:append(C.lua_replace(- #names_ast - 2 - extra))
     -- loop variables
-    if enable_closures then
+    local pos1 = #block_cast
+    local idx1 = idxtop - #names_ast
+    do -- locals used as upvalues
       local varids = {}
-      local pos1 = #block_cast
+      local nlocals = 0  -- number of non-up-value-enabled locals found
       for i=#names_ast,1,-1 do
-        varids[i] = nextvarid()
         local name_ast = names_ast[i]
-        local name_id = name_ast[1]; assert(name_ast.tag == 'Id')
-        block_cast:append(C.lua_rawseti(-i-1, varids[i]))
-        idxtop = idxtop - 1
-        currentscope[name_id] =
-          {tag='Upval', ct_idx, currentscope['.closurelevel'], varids[i]}
+        if name_ast.upvalue then
+          local name_id = name_ast[1]; assert(name_ast.tag == 'Id')
+          varids[i] = nextvarid()
+          if nlocals == 0 then
+            block_cast:append(C.lua_rawseti(-1 - i, varids[i]))
+          else
+            block_cast:append(C.lua_pushvalue(-1 - nlocals))
+            block_cast:append(C.lua_rawseti(realidx(ct_idx), varids[i])) 
+            block_cast:append(C.lua_remove(-1 - nlocals))
+          end
+          idxtop = idxtop - 1
+          currentscope[name_id] =
+            {tag='Upval', ct_idx, currentscope['.closurelevel'], varids[i]}
+        else
+          nlocals = nlocals + 1
+        end
       end
-      for i,name_ast in ipairs(names_ast) do
+      for i,name_ast in ipairs(names_ast) do if varids[i] then
         addcomment(block_cast[pos1+1],
-          string.format("internal: local %s with id %d",
+          string.format("internal: upvalue-enabled local %s with id %d",
                         name_ast[1], varids[i]))
-      end
-    else
+      end end
+    end
+    if pos1 == #block_cast then
+      -- hack: ensure AST node exists in which to place comment.
+      block_cast:append(C.C'')
+    end
+    do -- locals
+      local count = 0
       for i,name_ast in ipairs(names_ast) do
-        local name_id = name_ast[1]; assert(name_ast.tag == 'Id')
-        currentscope[name_id] = idxtop - #names_ast + i
+        if not name_ast.upvalue then
+          local name_id = name_ast[1]; assert(name_ast.tag == 'Id')
+          count = count + 1
+          currentscope[name_id] = idx1 + count
+          addcomment(block_cast[pos1+1],
+            string.format("internal: local %s with idx %d",
+                          name_id, currentscope[name_id]))
+        end
       end
     end
 
@@ -1576,7 +1624,11 @@ local function genlocalstat(ast)
   local cast = cexpr()
 
   local ct_idx
-  if enable_closures then
+  local is_upvalue = false
+  for i,name_ast in ipairs(names_ast) do
+    is_upvalue = is_upvalue or name_ast.upvalue
+  end
+  if is_upvalue then
     ct_idx = cast:append(gennewclosuretable()).idx
   end
 
@@ -1596,31 +1648,31 @@ local function genlocalstat(ast)
     cast:append(C.lua_pop(#vals_ast - #names_ast))
   end
 
-  if enable_closures then
+  if ct_idx then
     -- activate closure scope (after having generated values)
     activate_closure_table(ct_idx)
   end
 
-  if enable_closures then
-    -- store values in closure table and create local symbols
-    for i=#names_ast,1,-1 do
-      local name = names_ast[i][1]
+  -- store values in closure table and create local symbols
+  for i=#names_ast,1,-1 do local name_ast = names_ast[i]
+    local name = name_ast[1]
 
+    if name_ast.upvalue then
       local varid = nextvarid()
       cast:append(C.lua_rawseti(realidx(ct_idx), varid))
       -- create local symbol
       currentscope[name] =
         {tag='Upval', ct_idx, currentscope['.closurelevel'], varid}
     end
-  else
-    -- create local symbols
-    for i,name_ast in ipairs(names_ast) do
-      local name = name_ast[1]; assert(name_ast.tag == 'Id')
+  end
+  -- create local symbols
+  for i,name_ast in ipairs(names_ast) do
+    local name = name_ast[1]; assert(name_ast.tag == 'Id')
+    if not name_ast.upvalue then
       idxtop = idxtop + 1
       currentscope[name] = idxtop
     end
   end
-
   return cast
 end
 
@@ -1667,8 +1719,8 @@ local function genlocalrec(ast)
   -- activate scope and symbol (prior to generating value)
   local ct_idx
   local varid
-  if enable_closures then
-    local name = name_ast[1]
+  local name = name_ast[1]
+  if name_ast[1].upvalue then
     ct_idx = cast:append(gennewclosuretable()).idx
     activate_closure_table(ct_idx)
     -- create local symbol
@@ -1683,7 +1735,7 @@ local function genlocalrec(ast)
   cast:append(genexpr(val_ast, 'onstack'))
 
   -- store value
-  if enable_closures then
+  if name_ast[1].upvalue then
     cast:append(C.lua_rawseti(realidx(ct_idx), varid))
   else
     idxtop = idxtop + 1
@@ -1838,7 +1890,7 @@ static int lc_pmain(lua_State * L) {
 
   lua_pushcfunction(L, traceback);
 
-  /* note: FIX - if enable_closures */
+  /* note: IMPROVE: closure not always needed here */
   lua_newtable(L); /* closure table */
   lua_pushcclosure(L, lc_main, 1);
   int i;
@@ -1872,6 +1924,139 @@ int main(int argc, const char ** argv) {
   return cast
 end
 
+
+-- First pass through AST.
+-- Each `Id node is marked with field upvalue = true if it is used as an
+-- upvalue.
+-- Each `Function node is marked with field uses_upvalue = true if it uses
+-- at least one upvalue.
+local function firstpass(ast)
+  -- Represents current lexical scope.
+  -- Maps variable name to variable info (see newvar).
+  local scope = {}
+
+  local functions = {}
+
+  local function newscope()
+    local saved_scope = scope
+    scope = setmetatable({}, {__index=scope})
+    return saved_scope
+  end
+
+  local function endscope(saved_scope)
+    scope = assert(saved_scope)
+  end
+
+  local function newvar(id_ast)
+    assert(id_ast.tag == 'Id', id_ast)
+    local name = id_ast[1]
+    scope[name] = {function_level = #functions, ast = id_ast}
+  end
+
+  local function usevar(name)
+    local varinfo = scope[name]
+    if varinfo and varinfo.function_level < #functions then
+      --io.stderr:write('upval:' .. varinfo.ast[1] .. "\n")
+      varinfo.ast.upvalue = true
+      for i=varinfo.function_level+1,#functions do
+        functions[i].uses_upvalue = true
+      end
+    end
+  end
+
+  local function process(ast)
+    if ast.tag == nil or ast.tag == 'Do' then  -- block
+      local saved_scope = newscope()
+      for _,stat_ast in ipairs(ast) do
+        process(stat_ast)
+      end
+      endscope(saved_scope)
+    elseif ast.tag == 'Set' then
+      for i=1,#ast[1] do process(ast[1][i]) end
+      for i=1,#ast[2] do process(ast[2][i]) end
+    elseif ast.tag == 'While' then
+      process(ast[1])
+      local saved_scope = newscope()
+      process(ast[2])
+      endscope(saved_scope)
+    elseif ast.tag == 'Repeat' then
+      local saved_scope = newscope()
+      process(ast[1])
+      process(ast[2])
+      endscope(saved_scope)
+    elseif ast.tag == 'If' then
+      for i=1,#ast do
+        if i % 2 == 0 or i == #ast then
+          local saved_scope = newscope()
+          process(ast[i])
+          endscope(saved_scope)
+        else
+          process(ast[i])
+        end      
+      end
+    elseif ast.tag == 'Fornum' then
+      local saved_scope = newscope()
+      newvar(ast[1])
+      for i=2,#ast do process(ast[i]) end
+      endscope(saved_scope)
+    elseif ast.tag == 'Forin' then
+      local saved_scope = newscope()
+      for i=1,#ast[1] do newvar(ast[1][i]) end
+      for i=1,#ast[2] do process(ast[2][i]) end
+      process(ast[#ast])
+      endscope(saved_scope)
+    elseif ast.tag == 'Local' then
+      if ast[2] then
+        for i=1,#ast[2] do process(ast[2][i]) end
+      end
+      for i=1,#ast[1] do newvar(ast[1][i]) end
+    elseif ast.tag == 'Localrec' then
+      for i=1,#ast[1] do newvar(ast[1][i]) end
+      if ast[2] then
+        for i=1,#ast[2] do process(ast[2][i]) end
+      end
+    --metalua: elseif ast.tag == 'Goto' or ast.tag == 'Label' then
+    elseif ast.tag == 'Return' then
+      for i=1,#ast do process(ast[i]) end
+    elseif ast.tag == 'Break' then
+    elseif ast.tag == 'Nil' or ast.tag == 'Dots' or ast.tag == 'True'
+           or ast.tag == 'False' or ast.tag == 'Number' or ast.tag == 'String'
+    then
+    elseif ast.tag == 'Function' then
+      local saved_scope = newscope()
+      table.insert(functions, ast)
+      for i=1,#ast[1] do
+        if ast[1][i].tag ~= 'Dots' then newvar(ast[1][i]) end
+      end
+      process(ast[2])
+      table.remove(functions)
+      endscope(saved_scope)
+    elseif ast.tag == 'Table' then
+      for i=1,#ast do process(ast[i]) end
+    elseif ast.tag == 'Pair' then
+      for i=1,2 do process(ast[i]) end
+    elseif ast.tag == 'Op' then
+      for i=2,#ast do process(ast[i]) end
+    elseif ast.tag == 'Paren' then
+      process(ast[1])
+    -- metalua: elseif ast.tag == 'Stat' then
+    elseif ast.tag == 'Call' then
+      for i=1,#ast do process(ast[i]) end
+    elseif ast.tag == 'Invoke' then
+      process(ast[1])
+      for i=3,#ast do process(ast[i]) end
+    elseif ast.tag == 'Index' then
+      for i=1,2 do process(ast[i]) end
+    elseif ast.tag == 'Id' then
+      usevar(ast[1])
+    else
+      assert(false, 'FIX:' .. ast.tag)
+    end
+  end
+
+
+  process(ast)
+end
 
 --
 -- SECTION: Converts C AST to C code string.
@@ -1965,6 +2150,12 @@ local function cast_tostring(cast)
     return 'return' .. (a_ast and ' ' .. cast_tostring(a_ast) or '')
   elseif cast.tag == 'Break' then
     return 'break'
+  elseif cast.tag == 'Call' then
+    local args = {tag='C'}
+    for i=2,#cast do
+      args[#args+1] = cast_tostring(cast[i])
+    end
+    return cast[1] .. '(' .. table.concat(args, ',') .. ')'
   elseif cast.tag == 'CallL' then
     local args = {tag='C', 'L'}
     for i=2,#cast do
@@ -2040,6 +2231,8 @@ end
 local src_file = io.open (src_filename, 'r')
 src            = src_file:read '*a'; src_file:close()
 local ast      = mlc.ast_of_luastring (src)
+
+firstpass(ast)
 
 -- io.stderr:write(table.tostring(ast, "nohash", 60))
 
