@@ -6,6 +6,7 @@
 -- unimplemented--see README file file for details.
 --
 -- FIX: NOT YET IMPLEMENTED:
+--  - lc_add et al don't always return numbers.
 --  - more comprehensive lua_checkstack accounting
 --  - old style vararg (arg) table inside vararg functions
 --    (LUA_COMPAT_VARARG)
@@ -1202,7 +1203,8 @@ function genexpr(ast, where, nret)
 --old:    elseif isupvalue(name) then
 --      NOTIMPL('upvalues (' .. name .. ')')
     else -- global
-      cast:append(C.lua_getglobal(name))
+      --old: cast:append(C.lua_getglobal(name))
+      cast:append(C.lua_getfield(C.C'LUA_ENVIRONINDEX', name))
     end
     return cast
   elseif ast.tag == 'Index' then
@@ -1236,7 +1238,8 @@ local function genlvalueassign(l_ast)
         cast:append(C.lua_replace(idx))
       end
     else  -- global
-      cast:append(C.lua_setglobal(name))
+      --old:cast:append(C.lua_setglobal(name))
+      cast:append(C.lua_setfield(C.C'LUA_ENVIRONINDEX', name))
     end
   elseif l_ast.tag == 'Index' then
     local t_ast, k_ast = l_ast[1], l_ast[2]
@@ -1715,12 +1718,11 @@ local function genlocalrec(ast)
   assert(val_ast.tag == 'Function')
 
   local cast = cexpr()
-
   -- activate scope and symbol (prior to generating value)
   local ct_idx
   local varid
   local name = name_ast[1]
-  if name_ast[1].upvalue then
+  if name_ast.upvalue then
     ct_idx = cast:append(gennewclosuretable()).idx
     activate_closure_table(ct_idx)
     -- create local symbol
@@ -1735,7 +1737,7 @@ local function genlocalrec(ast)
   cast:append(genexpr(val_ast, 'onstack'))
 
   -- store value
-  if name_ast[1].upvalue then
+  if name_ast.upvalue then
     cast:append(C.lua_rawseti(realidx(ct_idx), varid))
   else
     idxtop = idxtop + 1
@@ -1956,7 +1958,7 @@ local function firstpass(ast)
   local function usevar(name)
     local varinfo = scope[name]
     if varinfo and varinfo.function_level < #functions then
-      --io.stderr:write('upval:' .. varinfo.ast[1] .. "\n")
+      --DEBUG('upval:', varinfo.ast)
       varinfo.ast.upvalue = true
       for i=varinfo.function_level+1,#functions do
         functions[i].uses_upvalue = true
@@ -2230,6 +2232,8 @@ end
 
 local src_file = io.open (src_filename, 'r')
 src            = src_file:read '*a'; src_file:close()
+src = src:gsub('^#[^\r\n]*', '') -- remove any shebang
+
 local ast      = mlc.ast_of_luastring (src)
 
 firstpass(ast)

@@ -49,7 +49,7 @@ lexer.patterns = {
    long_string         = "^%[(=*)%[\n?(.-)%]%1%]()",
    number_mantissa     = {
       "^%d+%.?%d*()",
-      "^%d*%d%.%d+()" },
+      "^%d*%.%d+()" },
    number_exponant = "^[eE][%+%-]?%d+()",
    word            = "^([%a_][%w_]*)()"
 }
@@ -62,7 +62,7 @@ local function unesc_letter(x)
    local t = { 
       a = "\a", b = "\b", f = "\f",
       n = "\n", r = "\r", t = "\t", v = "\v",
-      ["\\"] = "\\", ["'"] = "'", ['"'] = '"' }
+      ["\\"] = "\\", ["'"] = "'", ['"'] = '"', ["\n"] = "\n" }
    return t[x] or error("Unknown escape sequence \\"..x)
 end
 
@@ -81,7 +81,7 @@ end
 -- as many times as required.
 ----------------------------------------------------------------------
 local function unescape_string (s)
-   return s:gsub("\\([0-9]+)", unesc_digits):gsub("\\(.)",unesc_letter)
+   return s:gsub("\\([0-9][0-9]?[0-9]?)", unesc_digits):gsub("\\(.)",unesc_letter)
 end
 
 lexer.extractors = {

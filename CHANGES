@@ -1,3 +1,12 @@
+2008-07-30
+  fixed bug in local function when an upvalue.
+  fixed mlp/gg lexer bug in numeric escapes \ddd in strings.
+  fixed mlp/gg lexer bug in "\\\n" in strings.
+  fixed mlp/gg lexer bug in numbers, e.g. ".1"
+  implemented: ignore shebang lines (#...)
+  implemented: globals via lua_getfield/lua_setfield/LUA_ENVIRONINDEX
+    rather than lua_getglobal/lua_setglobal.
+
 2008-07-29
   optimized locals not used as upvalues
   fixed numeric break stack bug
