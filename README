@@ -1,19 +1,18 @@
-lua2c - converts Lua source code to C code.
+lua2c - converts Lua 5.1 source code to C code.
 
 == Description ==
 
 This utility converts a given Lua source file into an equivalent C
 source file containing Lua C API calls.  At least, this is true for a
-large subset of the Lua language (see limitations below).  The
-compiler is written entirely in Lua.
+large subset of the Lua language (see limitations below).
 
-WARNING: This code is in development and should be considered
-experimental.  It does successfully convert many of Lua's examples and
-passes most of the Lua 5.1 test suite, but it fails on the examples
-that use features identified in the limitations.  Some errors remain,
-so dig into the code, fix anything that's broken or not implemented,
-and post the patch. This code can be made robust for a large subset of
-Lua.  Please report bugs/patches on the wiki.
+The compiler is written entirely in Lua.  This project reuses
+Metalua's gg/mlp parser to convert Lua source to a Metalua-style[1]
+AST over which the compiler then operates.  gg/mlp is bundled in the
+distribution (patched metalua-0.4.1-rc1) and is written in pure Lua,
+so no build/install is needed.  lua2c does not require Metalua itself.
+
+== Usage ==
 
 Example usage:
 
@@ -26,13 +25,14 @@ code and execute all in one step.  However, you may need to edit the
 variables in the file to match your system.  This utility invokes the
 C compiler.
 
-  clua test/bisect.lua
+  ./clua test/bisect.lua
 
-This project reuses Metalua's gg/mlp parser to convert Lua source to a
-Metalua-style[1] AST over which the compiler then operates.  gg/mlp is
-bundled in the distribution (patched metalua-0.4.1-rc1) and is written
-in pure Lua, so no build/install is needed.  lua2c does not require
-Metalua itself.
+lua2c can even compile itself!  (Note: the -c option compiles only
+without running.)
+
+  ./clua -c lua2c.lua               # compile lua2c binary
+
+  ./lua2c examples-lua/bisect.lua   # test
 
 == Related Work ==
 
@@ -57,6 +57,9 @@ Metalua itself.
 
 == Potential Uses ==
 
+I think this project not only is nice theoretically to have but
+has a number of potential uses:
+
   * Provide another approach of compiling Lua to machine code
     (rather than luac + bin2c)
 
@@ -71,7 +74,7 @@ Metalua itself.
     the Lua C API.  This could allow certain Lua code written
     with sufficient care to run at native speeds.
 
-== Limitations ==
+== Limitations / Status ==
 
 lua2c does not currently support coroutines, tail call optimizations,
 and functions that normally reject C functions (e.g. setfenv).
@@ -82,13 +85,13 @@ simulating coroutines in C with a lot of ugly code).
 Closures and upvalues are implemented, but creating and accessing
 upvalues is somewhat slow.
 
-== Status ==
+WARNING: This code passes much of the Lua 5.1 test suite[7] and can
+compile itself, but the code is new and there can still be errors.
+In particular, a few language features (e.g. coroutines) are not
+implemented.  See comments in lua2c.lua for details.  Please report
+bugs/patches on the wiki.
 
-See warnings/limitations above.  I think this project (besides being
-theoretically nice to have) has a number of potential uses.  Please
-dig into the code and post patches if you are so inclined.
-
-Once the code is complete/robust, more attention can be given to
+Once the code is more complete/robust, more attention can be given to
 optimizing the code generation.
 
 == Project Page ==
@@ -108,3 +111,5 @@ license).  See included LICENSE file for full licensing details.
   * [4] luagen++ - LuaGenPlusPlus
   * [5] Pyrex - http://www.cosc.canterbury.ac.nz/greg.ewing/python/Pyrex/
   * [6] Clue - http://cluecc.sourceforge.net/
+  * [7] Lua 5.1 test suite -
+        http://www.inf.puc-rio.br/~roberto/lua/lua5.1-tests.tar.gz

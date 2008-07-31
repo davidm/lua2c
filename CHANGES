@@ -1,3 +1,9 @@
+2008-07-31
+  fixed numeric ops with metamethods returning non-numbers
+  fixed: handle "(error object is not a string)"
+  fixed: elseif expression evaluation evaluation order
+  added: -c (compile only) command-line switch to clua.
+
 2008-07-30
   fixed bug in local function when an upvalue.
   fixed mlp/gg lexer bug in numeric escapes \ddd in strings.

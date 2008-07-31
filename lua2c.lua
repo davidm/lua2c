@@ -1,25 +1,43 @@
--- lua2c - convert Lua source to C code.
+-- lua2c - convert Lua 5.1 source to C code.
 --
--- WARNING: This code is under development.  A number of
--- things may be broken/unimplemented at this time.
--- A few things (upvalues/coroutines/tail calls) might remain
--- unimplemented--see README file file for details.
+-- STATUS:
+--   WARNING: This code passes much of the Lua 5.1 test suite,
+--   but the code is new and there can still be errors.  In particular,
+--   a few language features (e.g. coroutines) are not implemented.
 --
--- FIX: NOT YET IMPLEMENTED:
---  - lc_add et al don't always return numbers.
---  - more comprehensive lua_checkstack accounting
---  - old style vararg (arg) table inside vararg functions
---    (LUA_COMPAT_VARARG)
---  - setfenv does not permit functions implemented in C
---  - tail call optimization?
---  - how to handle coroutines?
+--   Unimplemented Lua language features:
+--    - deprecated old style vararg (arg) table inside vararg functions
+--      (LUA_COMPAT_VARARG)
+--    - debug.getinfo(f, 'n').name for functions implemented in C
+--    - setfenv does not permit functions implemented in C
+--    - how well do tail call optimizations work?
+--    - how to handle coroutines?
+--      Coco useful here? [ http://luajit.org/coco.html ]
+--    Note: A few things (coroutines) might remain
+--      unimplemented--see README file file for details.
 --
--- (c) 2008 David Manura.  Licensed under the same terms as Lua (MIT license).
+--   Possible improvements:
+--    - gcc warning: unused variable `lc_nextra'
+--    - Literal numbers are rendered as C integers literals (e.g. 123)
+--      rather than C double literals (eg. 123.0).  Therefore, large values
+--      can give gcc warnings such as 'warning: integer constant is too
+--      large for "long" type').
+--    - Generated C functions could be named based on the Lua function
+--      name.
+--    - improved debug tracebacks on exceptions
+--    - See items marked FIX in below code.
+--
+-- SOURCE:
+--
+--   http://lua-users.org/wiki/LuaToCee
+--   (c) 2008 David Manura.  Licensed in the same terms as Lua (MIT license).
+--   Please post any patches/improvements.
+--
 
 package.path = package.path .. ';./lib/?.lua'
 
 
--- gg/mlp Lua parsing Libraries from Metalua.
+-- gg/mlp Lua parsing Libraries taken from Metalua.
 require "lexer"
 require "gg"
 require "mlp_lexer"
@@ -98,9 +116,6 @@ end
 local src
 
 
--- topmost stack index
-local idxtop = 0
-
 -- info on current scope. includes
 -- table of local variables.
 -- Maps name -> stack index
@@ -109,8 +124,26 @@ local currentscope = {['.closurelevel'] = 0}
 -- Information on function currently being compiled.
 local funcinfo = {is_vararg=false, nformalparams=0,
   is_lc_nextra_used=false, is_lc_nactualargs_used=false,
+  idxtopmax = 0
   --old: outervars={}
 }
+
+
+-- topmost stack index
+local idxtop = 0
+
+-- Mutators for idxtop.
+local function idxtop_change(n)
+  idxtop = idxtop + n
+  funcinfo.idxtopmax = math.max(funcinfo.idxtopmax, idxtop)
+end
+local function idxtop_pad(n)
+  
+end
+local function idxtop_restore(idx)
+  assert(idx <= idxtop)
+  idxtop = idx
+end
 
 -- Builds set from elements in array t.
 local function makeset(t)
@@ -161,6 +194,7 @@ local fops = {
 -- Maps operator identifier to function that returns
 -- a C code string implementing that identifier
 -- (without metamethods).
+-- Only for binary arthmetic ops.
 local opid_to_c = {
   ["add"]=function(a,b) return a .. ' + ' .. b end,
   ["sub"]=function(a,b) return a .. ' - ' .. b end,
@@ -172,15 +206,6 @@ local opid_to_c = {
           -- note: requies math.h
   ["pow"]=function(a,b) return 'pow(' .. a .. ',' .. b .. ')' end,
           -- note: requies math.h
-  --["concat"]=function(a,b) return FIX end,
-  --["eq"]=function(a,b) return FIX end,
-  --["lt"]=function(a,b) return FIX end,
-  --["le"]=function(a,b) return FIX end,
-  --["and"]=function(a,b) return FIX end,
-  --["or"]=function(a,b) return FIX end,
-  --["not"] = function(a) return FIX end,
-  --["len"] = function(a) return FIX end,
-  --["unm"] = function(a) return FIX end
 }
 
 -- Converts Lua object to Lua AST.
@@ -196,7 +221,7 @@ local function obj_to_ast(obj)
   elseif type(obj) == 'string' then
     return {tag='String', obj}
   else
-    NOTIMPL(tostring(obj))
+    assert(false, tostring(obj))
   end
 end
 
@@ -214,7 +239,7 @@ local function append_cast(cast1, cast2)
   end
   append_array(cast1, cast2)
   append_array(cast1.pre, cast2.pre)
-  return cast2  --FIX:ok?
+  return cast2  --FIX:improve style?
 end
 
 
@@ -298,7 +323,8 @@ local function adjustidxs(...)
   local result = {...}
   for i=#result,1,-1 do
     local idx = result[i]
-    if type(idx) ~= 'table' and idx < 0 then  --FIX: and idx > LUA_REGISTRYINDEX ?
+    if type(idx) ~= 'table' and idx < 0 then
+            --FIX: and idx > LUA_REGISTRYINDEX ?
       result[i] = result[i] - nused
     end
     if idx == -1 then
@@ -409,12 +435,12 @@ local function restorestackrel(cast, idx_old)
     cast:append(C.lua_pop(npushed))
     addcomment(cast[#cast], 'internal: stack cleanup on scope exit')
   end
-  idxtop = idxtop - npushed
+  idxtop_change(- npushed)
 end
 
 local function restorestackabs(cast, idx_old_cast, idx_old)
   cast:append(C.lua_settop(realidx(idx_old_cast)))
-  idxtop = idx_old
+  idxtop_restore(idx_old)
 end
 
 
@@ -468,21 +494,18 @@ local function genarithbinop(ast, where)
     local ccode = string.format([[
 /* __%s metamethod handler.
  * warning: assumes indices in range LUA_REGISTRYINDEX < x < 0 are relative. */
-static double lc_%s(lua_State * L, int idxa, int idxb) {
+static void lc_%s(lua_State * L, int idxa, int idxb) {
   if (lua_isnumber(L,idxa) && lua_isnumber(L,idxb)) {
-    return %s;
+    lua_pushnumber(L,%s);
   }
   else {
     if (luaL_getmetafield(L,idxa,"__%s")||luaL_getmetafield(L,idxb,"__%s")) {
       lua_pushvalue(L,idxa < 0 && idxa > LUA_REGISTRYINDEX ? idxa-1 : idxa);
       lua_pushvalue(L,idxb < 0 && idxb > LUA_REGISTRYINDEX ? idxb-2 : idxb);
       lua_call(L,2,1);
-      const double result = lua_tonumber(L,-1);
-      lua_pop(L,1);
-      return result;
     }
     else {
-      return luaL_error(L, "attempt to perform arithmetic");
+      luaL_error(L, "attempt to perform arithmetic");
     }
   }
 }
@@ -514,13 +537,9 @@ static double lc_%s(lua_State * L, int idxa, int idxb) {
   local b_idx = cast:append(genexpr(b_ast, 'anywhere')).idx
   local nstack = countstack(a_idx, b_idx)
   a_idx, b_idx = adjustidxs(a_idx, b_idx)
-  if nstack == 0 then
-    cast:append(C.lua_pushnumber(C.CallL('lc_'..opid, a_idx, b_idx)))
-  else
-    local id = nextid()
-    cast:append(C.LetDouble(id, C.CallL('lc_'..opid, a_idx, b_idx)))
-    cast:append(C.lua_pop(nstack))
-    cast:append(C.lua_pushnumber(C.Id(id)))
+  cast:append(C.CallL('lc_'..opid, a_idx, b_idx))
+  for i=1,nstack do
+    cast:append(C.lua_remove(-2))
   end
 
   return cast
@@ -684,20 +703,17 @@ local function genunmop(ast, where)
     local ccode = [[
 /* __unm metamethod handler.
  * warning: assumes indices in range LUA_REGISTRYINDEX < x < 0 are relative. */
-static double lc_unm(lua_State * L, int idxa) {
+static void lc_unm(lua_State * L, int idxa) {
   if (lua_isnumber(L,idxa)) {
-    return - lua_tonumber(L, idxa);
+    lua_pushnumber(L,- lua_tonumber(L, idxa));
   }
   else {
     if (luaL_getmetafield(L,idxa,"__unm")) {
       lua_pushvalue(L,idxa < 0 && idxa > LUA_REGISTRYINDEX ? idxa-1 : idxa);
       lua_call(L,1,1);
-      const double result = lua_tonumber(L,-1);
-      lua_pop(L,1);
-      return result;
     }
     else {
-      return luaL_error(L, "attempt to perform arithmetic");
+      luaL_error(L, "attempt to perform arithmetic");
     }
   }
 }
@@ -719,13 +735,9 @@ static double lc_unm(lua_State * L, int idxa) {
   local a_idx = cast:append(genexpr(a_ast, 'anywhere')).idx
   local nstack = countstack(a_idx)
   a_idx = adjustidxs(a_idx)
-  if nstack == 0 then
-    cast:append(C.lua_pushnumber(C.CallL('lc_'..opid, a_idx)))
-  else
-    local id = nextid()
-    cast:append(C.LetDouble(id, C.CallL('lc_'..opid, a_idx)))
-    cast:append(C.lua_pop(nstack))
-    cast:append(C.lua_pushnumber(C.Id(id)))
+  cast:append(C.CallL('lc_'..opid, a_idx))
+  for i=1,nstack do
+    cast:append(C.lua_remove(-2))
   end
 
   return cast
@@ -742,7 +754,6 @@ local function genconcatop(ast, where)
 
   return cast
 end
-
 
 -- note: call activate_closure_table() afterward.
 local function gennewclosuretable(cast)
@@ -771,7 +782,7 @@ static void lc_newclosuretable(lua_State * L, int idx) {]])
   end
 
   cast:append(C.CallL('lc_newclosuretable', get_closuretableidx_cast()))
-  idxtop = idxtop + 1
+  idxtop_change(1)
 
   local id = nextid()
   cast:append(C.Enum(id, idxtop))
@@ -802,9 +813,11 @@ local function genfunctiondef(ast, ismain)
   local nformalargs = #params_ast - (has_vararg and 1 or 0)
   funcinfo = {is_vararg = has_vararg, nformalparams = nformalargs,
     is_lc_nextra_used = false, is_lc_nactualargs_used=false,
+    idxtopmax = 0
     --old: outervars = currentscope
   }
 
+  -- note: special usage of idxtop
   local idxtop_old = idxtop
   idxtop = 0
 
@@ -818,7 +831,7 @@ local function genfunctiondef(ast, ismain)
       assert(var_ast.tag == 'Id')
       local varname = var_ast[1]
       currentscope[varname] = i
-      idxtop = idxtop + 1
+      idxtop_change(1)
     end
   end
 
@@ -855,9 +868,10 @@ local function genfunctiondef(ast, ismain)
   local bodypre_cast = cexpr()
 
   -- Ensure stack space.
-  local fudge_factor = 10 --FIX-hack
-  if idxtop + fudge_factor >= LUA_MINSTACK then
-    bodypre_cast:append(C.lua_checkstack(idxtop + fudge_factor))
+  local fudge = 10 -- allow some extra space, avoiding detailed
+                   -- accounting. FIX: is this always sufficient?
+  if funcinfo.idxtopmax + fudge >= LUA_MINSTACK then
+    bodypre_cast:append(C.lua_checkstack(funcinfo.idxtopmax + fudge))
   end
 
   -- note: do after generating body do that funcinfo params are set
@@ -897,8 +911,6 @@ local function genfunctiondef(ast, ismain)
   if #body_ast == 0 or body_ast[#body_ast].tag ~= 'Return' then
     body_cast:append(C.Return(0))
   end
-
-  --FIX:check for stack overflow / lua_checkstack
 
   local id = ast.is_main and 'lc_main'
              or nextid() .. '_func'  -- IMPROVE: deduce function name
@@ -1200,8 +1212,6 @@ function genexpr(ast, where, nret)
       else
         cast:append(C.lua_pushvalue(idx))
       end
---old:    elseif isupvalue(name) then
---      NOTIMPL('upvalues (' .. name .. ')')
     else -- global
       --old: cast:append(C.lua_getglobal(name))
       cast:append(C.lua_getfield(C.C'LUA_ENVIRONINDEX', name))
@@ -1268,10 +1278,10 @@ local function genif(ast)
   local base_id = nextid()
   cast:append(C.Enum(base_id, base_idx))
 
-  for i=2,#ast,2 do
-    local expr_ast, body_ast = ast[i-1], ast[i]
+  do
+    local expr_ast, body_ast = ast[1], ast[2]
 
-    idxtop = base_idx
+    idxtop_restore(base_idx)
 
     -- expression
     local a_idx = cast:append(genexpr(expr_ast, 'anywhere')).idx
@@ -1291,12 +1301,19 @@ local function genif(ast)
     append_array(cast.pre, block_cast.pre)
     restorescope(currentscope_save)
   end
-  if #ast % 2 == 1 then
 
-    idxtop = base_idx
+  if ast[3] then
+    idxtop_restore(base_idx)
 
     local currentscope_save = newscope()
-    local block_cast = genblock(ast[#ast])
+    local block_cast
+    if not ast[4] then
+      block_cast = genblock(ast[3])
+    else
+      local nested_ast = {tag='If'}
+      for i=3,#ast do nested_ast[#nested_ast+1] = ast[i] end
+      block_cast = genif(nested_ast)
+    end
     table.insert(if_args, block_cast)
     append_array(cast.pre, block_cast.pre)
     restorescope(currentscope_save)
@@ -1307,12 +1324,12 @@ local function genif(ast)
   cast:append(C.If(unpack(if_args)))
 
   cast:append(C.lua_settop(realidx(C.Id(base_id))))
-  idxtop = base_idx
+  idxtop_restore(base_idx)
 
   return cast
 end
 
---FIX:stack cleanup on break
+
 -- Converts Lua `Fornum AST to C AST.
 local function genfornum(ast)
   local name_ast, e1_ast, e2_ast, e3_ast, block_ast =
@@ -1382,7 +1399,7 @@ local function genfornum(ast)
       {tag='Upval', ct_idx, currentscope['.closurelevel'], varid}
   else
     block_cast:append(C.lua_pushnumber(C.Id(var_id)))
-    idxtop = idxtop + 1
+    idxtop_change(1)
     currentscope[name_id] = idxtop
   end
   block_cast[1].comment =
@@ -1425,7 +1442,7 @@ local function genforin(ast)
   if nlast < 0 then
     cast:append(C.lua_pop(-nlast))
   end
-  idxtop = idxtop + 3
+  idxtop_change(3)
   addcomment(cast[1], 'internal: local f, s, var = explist')
 
   local base2_idx = idxtop
@@ -1456,7 +1473,7 @@ local function genforin(ast)
     block_cast:append(C.lua_pushvalue(-3 - extra))
     block_cast:append(C.lua_pushvalue(-3 - extra))
     block_cast:append(C.lua_call(2,#names_ast))
-    idxtop = idxtop + #names_ast
+    idxtop_change(#names_ast)
     block_cast:append(C.If(C.lua_isnil(- #names_ast), {C.Break()}))
     block_cast:append(C.lua_pushvalue(- #names_ast))
     block_cast:append(C.lua_replace(- #names_ast - 2 - extra))
@@ -1478,7 +1495,7 @@ local function genforin(ast)
             block_cast:append(C.lua_rawseti(realidx(ct_idx), varids[i])) 
             block_cast:append(C.lua_remove(-1 - nlocals))
           end
-          idxtop = idxtop - 1
+          idxtop_change(- 1)
           currentscope[name_id] =
             {tag='Upval', ct_idx, currentscope['.closurelevel'], varids[i]}
         else
@@ -1586,7 +1603,7 @@ local function genrepeat(ast)
 
       -- expression
       local expr_idx = block_cast:append(genexpr(expr_ast, 'anywhere')).idx
-      idxtop = idxtop + 1
+      idxtop_change(1)
       block_cast:append(
         C.If(C.lua_toboolean(expr_idx), {C.Break()}))
 
@@ -1672,7 +1689,7 @@ local function genlocalstat(ast)
   for i,name_ast in ipairs(names_ast) do
     local name = name_ast[1]; assert(name_ast.tag == 'Id')
     if not name_ast.upvalue then
-      idxtop = idxtop + 1
+      idxtop_change(1)
       currentscope[name] = idxtop
     end
   end
@@ -1740,7 +1757,7 @@ local function genlocalrec(ast)
   if name_ast.upvalue then
     cast:append(C.lua_rawseti(realidx(ct_idx), varid))
   else
-    idxtop = idxtop + 1
+    idxtop_change(1)
   end
 
   return cast
@@ -1785,7 +1802,7 @@ local function genstatement(stat_ast)
   elseif stat_ast.tag == 'Localrec' then
     cast = genlocalrec(stat_ast)
   elseif stat_ast.tag == 'Break' then
-    cast = cexpr(C.Break()) --FIX: if any cleanup on scope exit needed
+    cast = cexpr(C.Break())
   else
     assert(false, stat_ast.tag)
   end 
@@ -1804,7 +1821,8 @@ function genblock(ast)
     cast:append(genstatement(stat_ast))
 
     --FIX:DEBUG: funcinfo.is_lc_nextra_used = true
-    --cast:append(C.C([[ assert(lua_gettop(L) - lc_nextra == ]] .. idxtop .. [[);]]))
+    --cast:append(C.C([[ assert(lua_gettop(L) - lc_nextra == ]]
+    -- .. idxtop .. [[);]]))
 
   end
   return cast
@@ -1901,7 +1919,9 @@ static int lc_pmain(lua_State * L) {
   }
   int status = lua_pcall(L, args->c-1, 0, -2);
   if (status != 0) {
-    fputs(lua_tostring(L,-1), stderr);
+    const char * msg = lua_tostring(L,-1);
+    if (msg == NULL) msg = "(error object is not a string)";
+    fputs(msg, stderr);
   }
   return 0;
 }
@@ -2052,7 +2072,7 @@ local function firstpass(ast)
     elseif ast.tag == 'Id' then
       usevar(ast[1])
     else
-      assert(false, 'FIX:' .. ast.tag)
+      assert(false,  ast.tag)
     end
   end
 
@@ -2095,6 +2115,7 @@ local no_semicolon = {
 
 -- Converts C AST to C code string.
 local function cast_tostring(cast)
+--  DEBUG(type(cast) == 'table' and cast.tag or cast)
   if type(cast) ~= 'table' then
     if type(cast) =='number' then  -- convenience function
       local s =
@@ -2245,6 +2266,4 @@ local cast = genfull(ast)
 -- io.stderr:write(table.tostring(cast, "nohash", 60))
 
 io.stdout:write(cast_tostring(cast))
-
-
 

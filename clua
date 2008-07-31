@@ -1,10 +1,22 @@
 #!/bin/sh
+#
+# Shell script wrapper to convert Lua to C and optionally
+# compile and run it.
 
+# You may need to change these variables:
 LUA=lua
 CC=gcc
 #CFLAGS=-g
 CFLAGS="-O2 -DNDEBUG -Wall -Ilua/src"
 LFLAGS="-Llua/src -llua"
+
+# option -c causes compilation only (no run)
+COMPILEONLY=
+if [ "$1" = "-c" ]
+then
+  COMPILEONLY=1
+  shift
+fi
 
 LUAFILE=$1
 FILENAME=${LUAFILE%.*}
@@ -12,5 +24,11 @@ CFILE=${FILENAME}.c
 
 ${LUA} lua2c.lua ${LUAFILE} > ${CFILE} || exit 1
 ${CC} ${CFLAGS} ${CFILE} -o ${FILENAME} ${LFLAGS} || exit 1
+
+if [ $COMPILEONLY ]
+then
+  exit 0
+fi
+
 shift
 ./${FILENAME} $@
