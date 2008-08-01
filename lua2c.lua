@@ -8,20 +8,18 @@
 --   Unimplemented Lua language features:
 --    - deprecated old style vararg (arg) table inside vararg functions
 --      (LUA_COMPAT_VARARG)
---    - debug.getinfo(f, 'n').name for functions implemented in C
---    - setfenv does not permit functions implemented in C
+--    - debug.getinfo(f, 'n').name for C-based functions
+--    - setfenv does not permit C-based functions
 --    - how well do tail call optimizations work?
---    - how to handle coroutines?
---      Coco useful here? [ http://luajit.org/coco.html ]
+--    - how to handle coroutines? (see README)
 --    Note: A few things (coroutines) might remain
 --      unimplemented--see README file file for details.
 --
 --   Possible improvements:
---    - gcc warning: unused variable `lc_nextra'
---    - Literal numbers are rendered as C integers literals (e.g. 123)
---      rather than C double literals (eg. 123.0).  Therefore, large values
---      can give gcc warnings such as 'warning: integer constant is too
---      large for "long" type').
+--    - Fix: large numerical literals can give gcc warnings such as
+--      'warning: integer constant is too large for "long" type').
+--      Literal numbers are rendered as C integers literals (e.g. 123)
+--      rather than C double literals (eg. 123.0).  
 --    - Generated C functions could be named based on the Lua function
 --      name.
 --    - improved debug tracebacks on exceptions
@@ -31,6 +29,7 @@
 --
 --   http://lua-users.org/wiki/LuaToCee
 --   (c) 2008 David Manura.  Licensed in the same terms as Lua (MIT license).
+--   See included LICENSE file for full licensing details.
 --   Please post any patches/improvements.
 --
 
@@ -124,6 +123,7 @@ local currentscope = {['.closurelevel'] = 0}
 -- Information on function currently being compiled.
 local funcinfo = {is_vararg=false, nformalparams=0,
   is_lc_nextra_used=false, is_lc_nactualargs_used=false,
+  is_lc_nextra_used_debug=false, is_lc_nactualargs_used_debug=false,
   idxtopmax = 0
   --old: outervars={}
 }
@@ -280,8 +280,7 @@ local function realidx(idx)
      (tag(idxreal) == 'Id' or idxreal > funcinfo.nformalparams)
   then
     if tag(idx) == 'Upval' then
-      idx = {tag='Upval', C.Op('+', idxreal, C.Id'lc_nextra'), idx[2], idx[3]}
-      funcinfo.is_lc_nextra_used = true
+      -- no adjustment
     else
       idx = C.Op('+', idx, C.Id'lc_nextra')
       funcinfo.is_lc_nextra_used = true
@@ -311,7 +310,7 @@ local function adjustidx(offset, idx)
   if type(idx) == 'table' or idx > 0 then
     return idx
   else -- relative stack index or pseudoindex
-     -- FIX:pseudoindices not supported
+     -- FIX:pseudoindices not supported?
     return idx + offset + 1
   end
 end
@@ -813,6 +812,7 @@ local function genfunctiondef(ast, ismain)
   local nformalargs = #params_ast - (has_vararg and 1 or 0)
   funcinfo = {is_vararg = has_vararg, nformalparams = nformalargs,
     is_lc_nextra_used = false, is_lc_nactualargs_used=false,
+    is_lc_nextra_used_debug = false, is_lc_nactualargs_used_debug=false,
     idxtopmax = 0
     --old: outervars = currentscope
   }
@@ -890,13 +890,25 @@ local function genfunctiondef(ast, ismain)
     -- (important for genexpr of `Id)
     if funcinfo.is_lc_nextra_used then
       funcinfo.is_lc_nactualargs_used = true
+    elseif funcinfo.is_lc_nextra_used_debug then
+      funcinfo.is_lc_nactualargs_used_debug = true
     end
+
     if funcinfo.is_lc_nactualargs_used then
       bodypre_cast:append(C.LetInt('lc_nactualargs', C.lua_gettop()))
+    elseif funcinfo.is_lc_nactualargs_used_debug then
+      bodypre_cast:append(C.C'#ifndef NDEBUG')
+      bodypre_cast:append(C.LetInt('lc_nactualargs', C.lua_gettop()))
+      bodypre_cast:append(C.C'#endif')
     end
     if funcinfo.is_lc_nextra_used then
       bodypre_cast:append(C.LetInt('lc_nextra',
         C.Op('-', C.Id'lc_nactualargs', C.Id'lc_nformalargs')))
+    elseif funcinfo.is_lc_nextra_used_debug then
+      bodypre_cast:append(C.C'#ifndef NDEBUG')
+      bodypre_cast:append(C.LetInt('lc_nextra',
+        C.Op('-', C.Id'lc_nactualargs', C.Id'lc_nformalargs')))
+      bodypre_cast:append(C.C'#endif')
     end
   else
     bodypre_cast:append(C.lua_settop(#params_ast))
@@ -1820,9 +1832,18 @@ function genblock(ast)
   for _,stat_ast in ipairs(ast) do
     cast:append(genstatement(stat_ast))
 
-    --FIX:DEBUG: funcinfo.is_lc_nextra_used = true
-    --cast:append(C.C([[ assert(lua_gettop(L) - lc_nextra == ]]
-    -- .. idxtop .. [[);]]))
+    -- DEBUG
+    if true then
+      if funcinfo.is_vararg then
+        funcinfo.is_lc_nextra_used_debug = true
+      end
+      if not is_created['assert.h'] then
+        append_array(cast.pre, {C.Include'<assert.h>'})
+        is_created['assert.h'] = true
+      end
+      cast:append(C.C(string.format([[assert(lua_gettop(L) %s== %d);]],
+        funcinfo.is_lc_nextra_used_debug and "- lc_nextra " or "", idxtop)))
+    end
 
   end
   return cast
@@ -2251,7 +2272,7 @@ if not src_filename then
   os.exit(1)
 end
 
-local src_file = io.open (src_filename, 'r')
+local src_file = assert(io.open (src_filename, 'r'))
 src            = src_file:read '*a'; src_file:close()
 src = src:gsub('^#[^\r\n]*', '') -- remove any shebang
 

@@ -9,13 +9,11 @@ dist :
 	DIR=lua2c-$(TAG) ; \
 	    (rm -fr $$DIR && \
 	     mkdir $$DIR && \
-	     mkdir $$DIR/examples && \
 	     mkdir $$DIR/examples-lua && \
 	     mkdir $$DIR/lib && \
 	     mkdir $$DIR/lib/metalua && \
 	     cp README LICENSE CHANGES Makefile lua2c.lua clua \
 	       $$DIR && \
-	     cp examples/*.lua $$DIR/examples/ && \
 	     cp examples-lua/*.lua $$DIR/examples-lua/ && \
 	     cp lib/*.lua $$DIR/lib/ && \
 	     cp lib/metalua/*.lua $$DIR/lib/metalua/ && \

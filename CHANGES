@@ -1,17 +1,22 @@
+2008-08-01
+  added: -C (C source generation only) command-line switch to clua.
+  added: debugging: assert stack checks between statements
+  fixed: warning from "unused variable `lc_nextra'"
+
 2008-07-31
+  added: -c (compile only) command-line switch to clua.
   fixed numeric ops with metamethods returning non-numbers
   fixed: handle "(error object is not a string)"
   fixed: elseif expression evaluation evaluation order
-  added: -c (compile only) command-line switch to clua.
 
 2008-07-30
+  implemented: ignore shebang lines (#...)
+  implemented: globals via lua_getfield/lua_setfield/LUA_ENVIRONINDEX
+    rather than lua_getglobal/lua_setglobal.
   fixed bug in local function when an upvalue.
   fixed mlp/gg lexer bug in numeric escapes \ddd in strings.
   fixed mlp/gg lexer bug in "\\\n" in strings.
   fixed mlp/gg lexer bug in numbers, e.g. ".1"
-  implemented: ignore shebang lines (#...)
-  implemented: globals via lua_getfield/lua_setfield/LUA_ENVIRONINDEX
-    rather than lua_getglobal/lua_setglobal.
 
 2008-07-29
   optimized locals not used as upvalues

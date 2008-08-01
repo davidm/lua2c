@@ -3,14 +3,16 @@ lua2c - converts Lua 5.1 source code to C code.
 == Description ==
 
 This utility converts a given Lua source file into an equivalent C
-source file containing Lua C API calls.  At least, this is true for a
-large subset of the Lua language (see limitations below).
+source file written in terms of Lua C API calls.  At least, this works
+for a large subset of the Lua language (see limitations below).
 
-The compiler is written entirely in Lua.  This project reuses
-Metalua's gg/mlp parser to convert Lua source to a Metalua-style[1]
-AST over which the compiler then operates.  gg/mlp is bundled in the
-distribution (patched metalua-0.4.1-rc1) and is written in pure Lua,
-so no build/install is needed.  lua2c does not require Metalua itself.
+The compiler is written entirely in Lua, and no build/install is
+needed.  This project reuses Metalua's gg/mlp parser to convert Lua
+source to a Metalua-style[1] AST over which the compiler then
+operates.  lua2c does not require Metalua itself though since gg/mlp
+is bundled in the distribution (patched metalua-0.4.1-rc1) and is
+written in pure Lua.
+
 
 == Usage ==
 
@@ -22,8 +24,8 @@ which generates a C file to standard output.
 
 You may also use the shell script "clua" to compile Lua->C->machine
 code and execute all in one step.  However, you may need to edit the
-variables in the file to match your system.  This utility invokes the
-C compiler.
+variables in the file to match your system since this utility invokes
+the C compiler.
 
   ./clua test/bisect.lua
 
@@ -36,16 +38,16 @@ without running.)
 
 == Related Work ==
 
-  * luac2c - This related effort Hisham Muhammad[2] converts Lua
+  * luac2c - This related effort by Hisham Muhammad[2] converts Lua
     bytecodes to C source, whereas this project converts Lua
     source to C source.  luac2c runs into a few similar
-    limitations as given above.  luac2c has remained experimental.
-    It superseded Luiz Henrique De Figueiredo's very basic but
-    similarly named lua2c for Lua 4.0.[3]
+    limitations as given below.  luac2c has remained experimental but
+    superseded Luiz Henrique De Figueiredo's very basic but similarly
+    named lua2c for Lua 4.0[3].
 
   * luagen++[4] uses C++ expression templates to translate
-    Lua-like C++ statements to C API calls.  The code generation
-    structure is actually fairly similar to lua2c.
+    Lua-like C++ statements to C API calls.  Some of the code
+    generation structure is actually fairly similar to lua2c.
 
   * Python Pyrex[5] does something similar in Python but has the
     added goal of lowering the boundary between C and Python
@@ -55,16 +57,19 @@ without running.)
   * Clue by David Given[6] does the opposite: convert C source
     to Lua source.
 
+  * luac + BinToCee allow compilation of Lua source to bytecodes
+    and/or embedding in a C file.
+
 == Potential Uses ==
 
-I think this project not only is nice theoretically to have but
+I think this project not only is theoretically nice to have but
 has a number of potential uses:
 
   * Provide another approach of compiling Lua to machine code
-    (rather than luac + bin2c)
+    (rather than luac + bin2c).
 
   * Streamline the interface between C and Lua code and allow
-    efficient access to C datatypes from Lua (see Pyrex above)
+    efficient access to C datatypes from Lua (see Pyrex above).
 
   * Compile Lua to optimized C.  For example, by statically
     determining that certain variables are used in a restricted
@@ -72,24 +77,26 @@ has a number of potential uses:
     determining this implicitly by inference), certain code
     constructs might be simplified to use plain C rather that
     the Lua C API.  This could allow certain Lua code written
-    with sufficient care to run at native speeds.
+    with sufficient care to run at native speeds.  Since it compiles
+    to C, it will even work on CPUs where LuaJIT is not available.
 
 == Limitations / Status ==
-
-lua2c does not currently support coroutines, tail call optimizations,
-and functions that normally reject C functions (e.g. setfenv).
-These don't have the exact analogue in C.  Coroutines might not ever
-be supported. However, some solutions might be explored (Coco or
-simulating coroutines in C with a lot of ugly code).
-
-Closures and upvalues are implemented, but creating and accessing
-upvalues is somewhat slow.
 
 WARNING: This code passes much of the Lua 5.1 test suite[7] and can
 compile itself, but the code is new and there can still be errors.
 In particular, a few language features (e.g. coroutines) are not
 implemented.  See comments in lua2c.lua for details.  Please report
 bugs/patches on the wiki.
+
+lua2c does not currently support coroutines, functions that normally
+reject C functions (e.g. setfenv), and possibly tail call
+optimizations.  Not all of these have the exact analogue in C.
+Coroutines might not ever be supported. However, some solutions might
+be explored[8][9], including possibly generating code that maintains
+the coroutine context in Lua tables.
+
+Closures and upvalues are implemented, but creating and accessing
+upvalues is somewhat slow.
 
 Once the code is more complete/robust, more attention can be given to
 optimizing the code generation.
@@ -102,6 +109,7 @@ The project page is currently http://lua-users.org/wiki/LuaToCee .
 
 (c) 2008 David Manura.  Licensed under the same terms as Lua (MIT
 license).  See included LICENSE file for full licensing details.
+Please post any patches/improvements.
 
 == References ==
 
@@ -113,3 +121,9 @@ license).  See included LICENSE file for full licensing details.
   * [6] Clue - http://cluecc.sourceforge.net/
   * [7] Lua 5.1 test suite -
         http://www.inf.puc-rio.br/~roberto/lua/lua5.1-tests.tar.gz
+  * [8] Wikipedia:Coroutine - Implementations for C
+        http://en.wikipedia.org/wiki/Coroutine#Implementations_for_C
+  * [9] Coco - http://luajit.org/coco.html Coco -
+        True C coroutine semantics (used in LuaJIT)
+  * [10] BinToCee - http://lua-users.org/wiki/BinToCee
+
