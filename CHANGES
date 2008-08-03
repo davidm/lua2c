@@ -1,3 +1,7 @@
+2008-08-02
+  added: support LUA_INIT environment variable.
+         Recommended by Shmuel Zeigerman
+
 2008-08-01
   added: -C (C source generation only) command-line switch to clua.
   added: debugging: assert stack checks between statements

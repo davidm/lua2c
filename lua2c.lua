@@ -1859,6 +1859,8 @@ end
 
 
 local function genfull(ast)
+  -- support LUA_INIT environment variable
+  local enable_lua_init = true
 
   local cast = cexpr(); cast.tag = 'Def'
 
@@ -1877,6 +1879,12 @@ extern "C" {
 #include <stdio.h>
 #include <stdlib.h>
 ]])
+
+  if enable_lua_init then
+    cast:append(C.C [[
+#include <string.h>
+]])
+  end
 
   cast:append(genmainchunk(ast))
 
@@ -1902,6 +1910,60 @@ static int traceback (lua_State *L) {
 }
 ]])
 
+  if enable_lua_init then
+    cast:append(C.C [[
+static void lc_l_message (const char *pname, const char *msg) {
+  if (pname) fprintf(stderr, "%s: ", pname);
+  fprintf(stderr, "%s\n", msg);
+  fflush(stderr);
+}
+
+static int lc_report (lua_State *L, int status) {
+  if (status && !lua_isnil(L, -1)) {
+    const char *msg = lua_tostring(L, -1);
+    if (msg == NULL) msg = "(error object is not a string)";
+    /*FIX-IMROVE:progname*/
+    lc_l_message("lua", msg);
+    lua_pop(L, 1);
+  }
+  return status;
+}
+
+static int lc_docall (lua_State *L, int narg, int clear) {
+  int status;
+  int base = lua_gettop(L) - narg;  /* function index */
+  lua_pushcfunction(L, traceback);  /* push traceback function */
+  lua_insert(L, base);  /* put it under chunk and args */
+  /*FIX? signal(SIGINT, laction); */
+  status = lua_pcall(L, narg, (clear ? 0 : LUA_MULTRET), base);
+  /*FIX? signal(SIGINT, SIG_DFL); */
+  lua_remove(L, base);  /* remove traceback function */
+  /* force a complete garbage collection in case of errors */
+  if (status != 0) lua_gc(L, LUA_GCCOLLECT, 0);
+  return status;
+}
+
+static int lc_dofile (lua_State *L, const char *name) {
+  int status = luaL_loadfile(L, name) || lc_docall(L, 0, 1);
+  return lc_report(L, status);
+}
+
+static int lc_dostring (lua_State *L, const char *s, const char *name) {
+  int status = luaL_loadbuffer(L, s, strlen(s), name) || lc_docall(L, 0, 1);
+  return lc_report(L, status);
+}
+
+static int lc_handle_luainit (lua_State *L) {
+  const char *init = getenv(LUA_INIT);
+  if (init == NULL) return 0;  /* status OK */
+  else if (init[0] == '@')
+    return lc_dofile(L, init+1);
+  else
+    return lc_dostring(L, init, "=" LUA_INIT);
+}
+]])
+  end
+
   cast:append(C.C [[
 typedef struct {
   int c;
@@ -1922,7 +1984,7 @@ static void lc_createarg(lua_State * L, const lc_args_t * const args) {
 }
 ]])
 
-  cast:append(C.C [[
+  cast:append(C.C([[
 static int lc_pmain(lua_State * L) {
   luaL_openlibs(L);
 
@@ -1931,6 +1993,13 @@ static int lc_pmain(lua_State * L) {
 
   lua_pushcfunction(L, traceback);
 
+]] .. (
+  enable_lua_init and [[
+  const int status1 = lc_handle_luainit(L);
+  if (status1 != 0) return 0;
+]] or '') ..
+[[
+
   /* note: IMPROVE: closure not always needed here */
   lua_newtable(L); /* closure table */
   lua_pushcclosure(L, lc_main, 1);
@@ -1938,15 +2007,15 @@ static int lc_pmain(lua_State * L) {
   for (i=1; i < args->c; i++) {
     lua_pushstring(L, args->v[i]);
   }
-  int status = lua_pcall(L, args->c-1, 0, -2);
-  if (status != 0) {
+  int status2 = lua_pcall(L, args->c-1, 0, -2);
+  if (status2 != 0) {
     const char * msg = lua_tostring(L,-1);
     if (msg == NULL) msg = "(error object is not a string)";
     fputs(msg, stderr);
   }
   return 0;
 }
-]])
+]]))
 
   cast:append(C.C [[
 int main(int argc, const char ** argv) {
