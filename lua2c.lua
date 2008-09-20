@@ -20,8 +20,6 @@
 --      'warning: integer constant is too large for "long" type').
 --      Literal numbers are rendered as C integers literals (e.g. 123)
 --      rather than C double literals (eg. 123.0).  
---    - Generated C functions could be named based on the Lua function
---      name (or include in comments)
 --    - improved debug tracebacks on exceptions
 --    - See items marked FIX in below code.
 --
