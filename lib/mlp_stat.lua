@@ -12,28 +12,6 @@
 -- for details.
 --
 ----------------------------------------------------------------------
--- History:
--- $Log: mlp_stat.lua,v $
--- Revision 1.7  2006/11/15 09:07:50  fab13n
--- debugged meta operators.
--- Added command line options handling.
---
--- Revision 1.6  2006/11/10 02:11:17  fab13n
--- compiler faithfulness to 5.1 improved
--- gg.expr extended
--- mlp.expr refactored
---
--- Revision 1.5  2006/11/09 09:39:57  fab13n
--- some cleanup
---
--- Revision 1.4  2006/11/07 21:29:02  fab13n
--- improved quasi-quoting
---
--- Revision 1.3  2006/11/07 04:38:00  fab13n
--- first bootstrapping version.
---
--- Revision 1.2  2006/11/05 15:08:34  fab13n
--- updated code generation, to be compliant with 5.1
 --
 ----------------------------------------------------------------------
 
@@ -43,15 +21,8 @@
 -- * [mlp.stat()]
 -- * [mlp.block()]
 -- * [mlp.for_header()]
--- * [mlp.add_block_terminators()]
 --
 --------------------------------------------------------------------------------
-
---require "gg"
---require "mll"
---require "mlp_misc"
---require "mlp_expr"
---require "mlp_meta"
 
 --------------------------------------------------------------------------------
 -- eta-expansions to break circular dependency
@@ -83,6 +54,7 @@ block = gg.list {
    name        = "statements block",
    terminators = block_terminators,
    primary     = function (lx)
+      -- FIXME use gg.optkeyword()
       local x = stat (lx)
       if lx:is_keyword (lx:peek(), ";") then lx:next() end
       return x
@@ -90,10 +62,17 @@ block = gg.list {
 
 --------------------------------------------------------------------------------
 -- Helper function for "return <expr_list>" parsing.
--- Called when parsing return statements
+-- Called when parsing return statements.
+-- The specific test for initial ";" is because it's not a block terminator,
+-- so without itgg.list would choke on "return ;" statements.
+-- We don't make a modified copy of block_terminators because this list
+-- is sometimes modified at runtime, and the return parser would get out of
+-- sync if it was relying on a copy.
 --------------------------------------------------------------------------------
-local return_expr_list_parser = gg.list { 
-   expr, separators = ",", terminators = block_terminators }
+local return_expr_list_parser = gg.multisequence{
+   { ";" , builder = function() return { } end }, 
+   default = gg.list { 
+      expr, separators = ",", terminators = block_terminators } }
 
 --------------------------------------------------------------------------------
 -- for header, between [for] and [do] (exclusive).
@@ -144,10 +123,15 @@ local method_name = gg.onkeyword{ name = "method invocation", ":", id,
 local function funcdef_builder(x)
    local name, method, func = x[1], x[2], x[3]
    if method then 
-      name = { tag="Index", name, method }
+      name = { tag="Index", name, method, lineinfo = {
+         first = name.lineinfo.first,
+         last  = method.lineinfo.last } }
       _G.table.insert (func[1], 1, {tag="Id", "self"}) 
    end
-   return { tag="Set", {name}, {func} } 
+   local r = { tag="Set", {name}, {func} } 
+   r[1].lineinfo = name.lineinfo
+   r[2].lineinfo = func.lineinfo
+   return r
 end 
 
 
@@ -198,7 +182,11 @@ end
 local local_stat_parser = gg.multisequence{
    -- local function <name> <func_val>
    { "function", id, func_val, builder = 
-      function(x) return { tag="Localrec", { x[1] }, { x[2] } } end },
+      function(x) 
+         local vars = { x[1], lineinfo = x[1].lineinfo }
+         local vals = { x[2], lineinfo = x[2].lineinfo }
+         return { tag="Localrec", vars, vals } 
+      end },
    -- local <id_list> ( = <expr_list> )?
    default = gg.sequence{ id_list, gg.onkeyword{ "=", expr_list },
       builder = function(x) return {tag="Local", x[1], x[2] or { } } end } }

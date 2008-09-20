@@ -21,7 +21,7 @@
 --      Literal numbers are rendered as C integers literals (e.g. 123)
 --      rather than C double literals (eg. 123.0).  
 --    - Generated C functions could be named based on the Lua function
---      name.
+--      name (or include in comments)
 --    - improved debug tracebacks on exceptions
 --    - See items marked FIX in below code.
 --
@@ -33,7 +33,7 @@
 --   Please post any patches/improvements.
 --
 
-package.path = package.path .. ';./lib/?.lua'
+package.path = './lib/?.lua;' .. package.path
 
 
 -- gg/mlp Lua parsing Libraries taken from Metalua.
@@ -225,6 +225,30 @@ local function obj_to_ast(obj)
   end
 end
 
+-- remove whitespace from front and end of string
+local function trim(s)
+  return s:gsub('^%s+', ''):gsub('%s+$', '')
+end
+
+-- Appends comment to C AST node.
+local function addcomment(cast, comment)
+  local s = cast.comment and cast.comment .. '\n' .. comment or comment
+  cast.comment = s
+end
+
+-- Prepends comment to C AST node.
+local function prependcomment(cast, comment)
+  local s = cast.comment and comment .. '\n' .. cast.comment or comment
+  cast.comment = s
+end
+
+-- Appends comment to C AST node.
+local function postcomment(cast, comment)
+  local s = cast.postcomment and cast.postcomment .. '\n' ..
+            comment or comment
+  cast.postcomment = s
+end
+
 
 -- Appends elements to array t2 to array t1.
 local function append_array(t1,t2)
@@ -233,11 +257,31 @@ end
 
 local function append_cast(cast1, cast2)
   if cast2.tag ~= nil then -- enclosing block omitted (convenience)
+                           -- :IMPROVE: the convenience possibly isn't
+                           -- worth the ambiguity. make separate function?
     assert(not cast2.pre)
     assert(not cast2.idx)
     cast2 = {cast2, pre=cast2.pre or {}, idx=nil}
   end
   append_array(cast1, cast2)
+  if cast2.comment then
+    if #cast2 > 0 then
+      prependcomment(cast2[1], cast2.comment)
+    elseif #cast1 > 0 then
+      postcomment(cast1[#cast1], cast2.comment)
+    else
+      assert(false)
+    end
+  end
+  if cast2.postcomment then
+    if #cast2 > 0 then
+      postcomment(cast2[#cast2], cast2.postcomment)
+    elseif #cast1 > 0 then
+      postcomment(cast1[#cast1], cast2.postcomment)
+    else
+      assert(false)
+    end
+  end
   append_array(cast1.pre, cast2.pre)
   return cast2  --FIX:improve style?
 end
@@ -344,63 +388,13 @@ local function countstack(...)
   return ncount
 end
 
-
--- Gets range of line/column numbers (line1, line2)
--- represented by AST.
--- Returns nothing if not information found.
--- IMPROVE:hack.  Does gg/mlp already provide this?
---   Could this support character positions too?
-local function linerange(ast)
-  if ast.lineinfo then
-    return ast.lineinfo.first, ast.lineinfo.last
-  end
-  local line1, line2
-  for i,ast2 in ipairs(ast) do
-    if type(ast2) == 'table' then
-      local line1_, line2_ = linerange(ast2)
-      if line1_ and (not line1 or line1_ < line1) then
-        line1 = line1_
-      end
-      if line2_ and (not line2 or line2_ > line2) then
-        line2 = line2_
-      end
-    end
-  end
-  if line1 then
-    return line1, line2
-  end
-end
-
--- Gets string representing lines first to last in string s.
-local cache
-local function getlines(s, first, last)
-  cache = cache or {}
-  local lines = cache[s]
-  if not lines then
-    lines = {}
-    for line in s:gmatch("([^\r\n]*)\r?\n?") do
-      lines[#lines+1] = line
-    end
-    lines[#lines] = nil
-    cache[s] = lines
-  end
-  local ts = {}
-  for i=first,last do ts[#ts+1] = lines[i] end
-  local slines = table.concat(ts, "\n")
-  return slines  
-end
-
-
--- Appends comment to C AST node.
-local function addcomment(cast, comment)
-  local s = cast.comment and cast.comment .. '\n' .. comment or comment
-  cast.comment = s
-end
-
--- Prepends comment to C AST node.
-local function prependcomment(cast, comment)
-  local s = cast.comment and comment .. '\n' .. cast.comment or comment
-  cast.comment = s
+-- Given AST ast taken from inside code string src,
+-- return code string representing AST.
+local function get_ast_string(src, ast, ...)
+  local first = ast.lineinfo.first[3]
+  local last  = ast.lineinfo.last [3]
+  local code = src:sub(first, last)
+  return code
 end
 
 -- Gets next unique ID.  Useful in variable names to
@@ -929,7 +923,15 @@ local function genfunctiondef(ast, ismain)
   local def_cast = cexpr()
   append_array(def_cast, body_cast.pre)
   local func_cast = C.Functiondef(id, body_cast)
-  func_cast.comment = getlines(src, linerange(ast))
+
+  local comment =
+    ast.is_main and '(...)' or
+    trim(src:sub(ast.lineinfo.first[3], params_ast.lineinfo.last[3])) .. ')'
+  if comment:sub(1,1) == '(' then
+    comment = 'function' .. comment
+  end
+  func_cast.comment = comment
+
   func_cast.id = id
   append_array(def_cast, { func_cast })
 
@@ -962,7 +964,8 @@ end
 
 
 local function genmainchunk(ast)
-  local astnew = {tag='Function', is_main=true, {{tag='Dots'}}, ast}
+  local astnew = {tag='Function', is_main=true, {{tag='Dots'}},
+    ast, lineinfo=ast.lineinfo} -- note: lineinfo not cloned. ok?
 
   return genfunctiondef(astnew, true)
 end
@@ -1280,7 +1283,8 @@ local function genlvalueassign(l_ast)
 end
 
 
-local function genif(ast)
+local function genif(ast, i)
+  i = i or 1  -- i > 1 is index in AST node of elseif branch to generate
   local cast = cexpr()
   local if_args = {pre=cast.pre}
 
@@ -1291,7 +1295,7 @@ local function genif(ast)
   cast:append(C.Enum(base_id, base_idx))
 
   do
-    local expr_ast, body_ast = ast[1], ast[2]
+    local expr_ast, body_ast = ast[i], ast[i+1]
 
     idxtop_restore(base_idx)
 
@@ -1314,17 +1318,18 @@ local function genif(ast)
     restorescope(currentscope_save)
   end
 
-  if ast[3] then
+  if ast[i+2] then
     idxtop_restore(base_idx)
 
     local currentscope_save = newscope()
     local block_cast
-    if not ast[4] then
-      block_cast = genblock(ast[3])
+    if not ast[i+3] then
+      block_cast = genblock(ast[i+2])
+      if block_cast[1] then
+        prependcomment(block_cast[1], 'else')
+      end
     else
-      local nested_ast = {tag='If'}
-      for i=3,#ast do nested_ast[#nested_ast+1] = ast[i] end
-      block_cast = genif(nested_ast)
+      block_cast = genif(ast, i+2)
     end
     table.insert(if_args, block_cast)
     append_array(cast.pre, block_cast.pre)
@@ -1338,7 +1343,16 @@ local function genif(ast)
   cast:append(C.lua_settop(realidx(C.Id(base_id))))
   idxtop_restore(base_idx)
 
-  return cast
+  local start =
+    i == 1 and ast.lineinfo.first[3] or ast[i-1].lineinfo.last[3]+1
+  prependcomment(cast, trim(src:sub(start, ast[i].lineinfo.last[3])) ..
+                          ' then')
+  if i == 1 then
+    postcomment(cast, 'end')
+  end
+  local comment = false
+
+  return cast, comment
 end
 
 
@@ -1431,7 +1445,12 @@ local function genfornum(ast)
   -- unknown size, so absolute adjust here.
   restorestackabs(cast, C.Id(base_id), base_idx)
 
-  return cast
+  prependcomment(cast,
+    trim(src:sub(ast.lineinfo.first[3], block_ast.lineinfo.first[3]-1)))
+  postcomment(cast, 'end')
+  local comment = false
+
+  return cast, comment
 end
 
 -- Converts Lua `Forin AST to C AST.
@@ -1550,7 +1569,12 @@ local function genforin(ast)
 
   restorestackabs(cast, C.Id(base_id), base_idx)
 
-  return cast
+  prependcomment(cast,
+    trim(src:sub(ast.lineinfo.first[3], block_ast.lineinfo.first[3]-1)))
+  postcomment(cast, 'end')
+  local comment = false
+
+  return cast, comment
 end
 
 
@@ -1591,7 +1615,12 @@ local function genwhile(ast)
   -- unknown size, so absolute adjust here.
   restorestackabs(cast, C.Id(base_id), base_idx)
 
-  return cast
+  prependcomment(cast,
+    trim(src:sub(ast.lineinfo.first[3], block_ast.lineinfo.first[3]-1)))
+  postcomment(cast, 'end')
+  local comment = false
+
+  return cast, comment
 end
 
 
@@ -1630,7 +1659,12 @@ local function genrepeat(ast)
   -- unknown size, so absolute adjust here.
   restorestackabs(cast, C.Id(base_id), base_idx)
 
-  return cast
+  prependcomment(cast, 'repeat')
+  postcomment(cast,
+    trim(src:sub(block_ast.lineinfo.last[3]+1, ast.lineinfo.last[3])))
+  local comment = false
+
+  return cast, comment
 end
 
 
@@ -1646,7 +1680,11 @@ local function gendo(ast)
   restorescope(currentscope_save)
   restorestackrel(cast, base_idx)
 
-  return cast
+  prependcomment(cast, 'do')
+  postcomment(cast, 'end')
+  local comment = false
+
+  return cast, comment
 end
 
 
@@ -1777,6 +1815,7 @@ end
 
 local function genstatement(stat_ast)
   local cast
+  local comment
   if stat_ast.tag == 'Set' then
     cast = genset(stat_ast)
   elseif stat_ast.tag == 'Return' then
@@ -1796,17 +1835,17 @@ local function genstatement(stat_ast)
       cast:append(C.Return(#stat_ast))
     end
   elseif stat_ast.tag == 'Fornum' then
-    cast = genfornum(stat_ast)
+    cast, comment = genfornum(stat_ast)
   elseif stat_ast.tag == 'Forin' then
-    cast = genforin(stat_ast)
+    cast, comment = genforin(stat_ast)
   elseif stat_ast.tag == 'While' then
-    cast = genwhile(stat_ast)
+    cast, comment = genwhile(stat_ast)
   elseif stat_ast.tag == 'Repeat' then
-    cast = genrepeat(stat_ast)
+    cast, comment = genrepeat(stat_ast)
   elseif stat_ast.tag == 'Do' then
-    cast = gendo(stat_ast)
+    cast, comment = gendo(stat_ast)
   elseif stat_ast.tag == 'If' then
-    cast = genif(stat_ast)
+    cast, comment = genif(stat_ast)
   elseif stat_ast.tag == 'Call' or stat_ast.tag == 'Invoke' then
     cast = genexpr(stat_ast, 'onstack', 0)
   elseif stat_ast.tag == 'Local' then
@@ -1818,11 +1857,10 @@ local function genstatement(stat_ast)
   else
     assert(false, stat_ast.tag)
   end 
-
-  assert(cast[1], table.tostring(cast))
-  local comment = getlines(src, linerange(stat_ast))
-  prependcomment(cast[1], comment)
-
+  if comment ~= false then
+    comment = comment or get_ast_string(src, stat_ast)
+    prependcomment(cast, comment)
+  end
   return cast
 end
 
@@ -1830,7 +1868,17 @@ end
 function genblock(ast)
   local cast = cexpr()
   for _,stat_ast in ipairs(ast) do
-    cast:append(genstatement(stat_ast))
+    local stat_cast = genstatement(stat_ast)
+
+    local comments = stat_ast.lineinfo.first.comments
+    if comments then
+      for i=#comments,1,-1 do
+        local comment = src:sub(comments[i][2], comments[i][3]):gsub('\n$','')
+        prependcomment(stat_cast, comment)
+      end
+    end
+
+    cast:append(stat_cast)
 
     -- DEBUG
     if true then
@@ -1846,6 +1894,26 @@ function genblock(ast)
     end
 
   end
+
+  if #ast > 0 then
+    local stat_ast = ast[#ast]
+    local comments = stat_ast.lineinfo.last.comments
+    if comments then
+      for i=1,#comments do
+        local comment = src:sub(comments[i][2], comments[i][3]):gsub('\n$','')
+        postcomment(cast[#cast], comment)
+      end
+    end
+  else
+    local comments = ast.lineinfo.first.comments
+    if comments then
+      for i=1,#comments do
+        local comment = src:sub(comments[i][2], comments[i][3]):gsub('\n$','')
+        postcomment(cast, comment)
+      end
+    end
+  end
+
   return cast
 end
 
@@ -2284,14 +2352,26 @@ local function cast_tostring(cast)
     return ccode
   elseif cast.tag == nil then -- block
     local ts = {}
+    if cast.comment then
+      ts[#ts+1] = '\n' .. ccomment(cast.comment) .. '\n'
+    end
     for i,stat_cast in ipairs(cast) do
       local comment = ''
       if stat_cast.comment then
         comment = '\n' .. ccomment(stat_cast.comment) .. '\n'
       end
+      local postcomment = ''
+      if stat_cast.postcomment then
+        postcomment = ccomment(stat_cast.postcomment) .. '\n'
+      end
       local semi = no_semicolon[stat_cast.tag] and '' or ';'
-      ts[i] = comment .. cast_tostring(stat_cast) .. semi .. '\n'
+      ts[#ts+1] = comment .. cast_tostring(stat_cast) .. semi .. '\n' ..
+              postcomment
     end
+    if cast.postcomment then
+      ts[#ts+1] = '\n' .. ccomment(cast.postcomment) .. '\n'
+    end
+
     local ccode = indentcode(table.concat(ts))
     return ccode
   elseif cast.tag == 'If' then
@@ -2316,10 +2396,14 @@ local function cast_tostring(cast)
     if cast.comment then
       comment = ccomment(cast.comment) .. '\n'
     end
+    local postcomment = ''
+    if cast.postcomment then
+      postcomment = ccomment(cast.postcomment) .. '\n'
+    end
     local ccode =
       comment ..
       'static int ' .. id .. ' (lua_State * L) {\n' ..
-      cast_tostring(body_cast) .. '}\n'
+      cast_tostring(body_cast) .. '}\n' .. postcomment
     return ccode
   elseif cast.tag:find'lua_' == 1 then  -- convenience function
     return cast_tostring{tag='CallL', cast.tag, unpack(cast)}

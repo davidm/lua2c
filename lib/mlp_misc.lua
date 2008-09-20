@@ -135,7 +135,7 @@ function id2string (id)
       -- That is, without sugar:
       return {tag="String",  {tag="Index", {tag="Splice", id[1] }, 
                                            {tag="Number", 1 } } }
-   else error ("Not an identifier: "..table.tostring(id)) end
+   else error ("Identifier expected: "..table.tostring(id)) end
 end
 
 --------------------------------------------------------------------------------
@@ -163,11 +163,20 @@ end
 --------------------------------------------------------------------------------
 -- Chunk reader: block + Eof
 --------------------------------------------------------------------------------
-local function _block(...) return block(...) end
-local function mandatory_eof (lx)
-   local eof = lx:peek()
-   if eof.tag ~= "Eof" then error "End-of-file expected" end
-   return true
+function skip_initial_sharp_comment (lx)
+   -- Dirty hack: I'm happily fondling lexer's private parts
+   -- FIXME: redundant with lexer:newstream()
+   lx :sync()
+   local i = lx.src:match ("^#.-\n()", lx.i)
+   if i then lx.i, lx.column_offset, lx.line = i, i, lx.line+1 end
 end
 
-chunk = gg.sequence{ _block, mandatory_eof, builder = fget(1) }
+function chunk (lx)
+   if lx:peek().tag == 'Eof' then return { } -- handle empty files
+   else 
+      skip_initial_sharp_comment (lx)
+      local chunk = block (lx)
+      if lx:peek().tag ~= "Eof" then error "End-of-file expected" end
+      return chunk
+   end
+end

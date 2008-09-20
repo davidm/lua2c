@@ -10,8 +10,7 @@ The compiler is written entirely in Lua, and no build/install is
 needed.  This project reuses Metalua's gg/mlp parser to convert Lua
 source to a Metalua-style[1] AST over which the compiler then
 operates.  lua2c does not require Metalua itself though since gg/mlp
-is bundled in the distribution (patched metalua-0.4.1-rc1) and is
-written in pure Lua.
+is bundled in the distribution and is written in pure Lua.
 
 
 == Usage ==

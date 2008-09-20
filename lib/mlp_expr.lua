@@ -137,7 +137,8 @@ local function op_ne(a, _, b)
    -- suppressed from the official AST grammar (although still supported
    -- in practice by the compiler).
    -- return { tag="Op", "ne", a, b }
-   return { tag="Op", "not", { tag="Op", "eq", a, b } }
+   return { tag="Op", "not", { tag="Op", "eq", a, b, lineinfo= {
+            first = a.lineinfo.first, last = b.lineinfo.last } } }
 end
    
 
@@ -198,5 +199,5 @@ expr = gg.expr { name = "expression",
          return {tag="Invoke", obj, id2string(post[1]), unpack(post[2])} end},
       { "+{", quote_content, "}", builder = function (f, arg) 
          return {tag="Call", f,  arg[1] } end },
-      default = { parse=mlp.opt_string, builder = function(f, arg) 
+      default = { name="opt_string_arg", parse = mlp.opt_string, builder = function(f, arg) 
          return {tag="Call", f, arg } end } } }
