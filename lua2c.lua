@@ -397,12 +397,23 @@ local function get_ast_string(src, ast, ...)
   return code
 end
 
--- Gets next unique ID.  Useful in variable names to
--- ensure uniqueness.
-local _id = 0
-local function nextid()
-  _id = _id + 1
-  return 'lc' .. _id
+-- Gets next unique ID.  Useful for generating unique variable names.
+-- orig_name is string of arbitrary text to base variable name
+--   on (optional and may be ignored)
+-- prefix is prefix string for variable (defaults to '')
+local names = {}
+local MAX_IDENTIFIER_LENGTH = 60 -- note: not a hard limit
+local function nextid(orig_name, prefix)
+  orig_name = orig_name or ''
+  prefix = prefix or ''
+
+  -- ensure will form a valid C identifier
+  local name = orig_name:gsub('[^%w_]', '_')
+
+  -- ensure uniqueness
+  names[name] = (names[name] or 0) + 1
+
+  return 'lc' .. prefix .. names[name] .. (name == '' and '' or '_') .. name
 end
 
 -- Gets next unique ID for lexical variable.
@@ -468,6 +479,19 @@ end
 
 local function get_closuretableidx_cast()
   return localidx('.closuretable')
+end
+
+-- Deduce names of functions by the variables they are assigned to.
+-- Given lists of LHS and RHS expressions, adds a "name" field
+-- to any applicable RHS expression.
+local function deduce_function_names(ls_ast, rs_ast)
+  for i,r_ast in ipairs(rs_ast) do
+    local l_ast = ls_ast[i]
+    if ls_ast[i] and r_ast.tag == 'Function' then
+      local name = get_ast_string(src, l_ast)
+      r_ast.name = name
+    end
+  end
 end
 
 
@@ -918,8 +942,8 @@ local function genfunctiondef(ast, ismain)
     body_cast:append(C.Return(0))
   end
 
-  local id = ast.is_main and 'lc_main'
-             or nextid() .. '_func'  -- IMPROVE: deduce function name
+  local id = ast.is_main and 'lcf_main'
+             or nextid(ast.name, 'f')
   local def_cast = cexpr()
   append_array(def_cast, body_cast.pre)
   local func_cast = C.Functiondef(id, body_cast)
@@ -929,6 +953,9 @@ local function genfunctiondef(ast, ismain)
     trim(src:sub(ast.lineinfo.first[3], params_ast.lineinfo.last[3])) .. ')'
   if comment:sub(1,1) == '(' then
     comment = 'function' .. comment
+  end
+  if ast.name then
+    comment = 'name: ' .. ast.name .. '\n' .. comment
   end
   func_cast.comment = comment
 
@@ -964,7 +991,7 @@ end
 
 
 local function genmainchunk(ast)
-  local astnew = {tag='Function', is_main=true, {{tag='Dots'}},
+  local astnew = {tag='Function', is_main=true, name='(main)', {{tag='Dots'}},
     ast, lineinfo=ast.lineinfo} -- note: lineinfo not cloned. ok?
 
   return genfunctiondef(astnew, true)
@@ -1702,6 +1729,8 @@ local function genlocalstat(ast)
     ct_idx = cast:append(gennewclosuretable()).idx
   end
 
+  deduce_function_names(names_ast, vals_ast)
+
   -- create values
   for i,val_ast in ipairs(vals_ast) do
     cast:append(genexpr(val_ast, 'onstack',
@@ -1752,6 +1781,8 @@ local function genset(stat_ast)
   local ls_ast, rs_ast = stat_ast[1], stat_ast[2]
   local cast = cexpr()
 
+  deduce_function_names(ls_ast, rs_ast)
+
   -- create values (r_ast)
   for i,r_ast in ipairs(rs_ast) do
     cast:append(genexpr(r_ast, 'onstack',
@@ -1799,6 +1830,8 @@ local function genlocalrec(ast)
   else
     currentscope[name] = idxtop + 1
   end
+
+  deduce_function_names(names_ast, vals_ast)
 
   -- create value
   cast:append(genexpr(val_ast, 'onstack'))
@@ -2070,7 +2103,7 @@ static int lc_pmain(lua_State * L) {
 
   /* note: IMPROVE: closure not always needed here */
   lua_newtable(L); /* closure table */
-  lua_pushcclosure(L, lc_main, 1);
+  lua_pushcclosure(L, lcf_main, 1);
   int i;
   for (i=1; i < args->c; i++) {
     lua_pushstring(L, args->v[i]);

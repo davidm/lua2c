@@ -3,6 +3,9 @@
     c995760d4ba67c4250ac6029c30ce9491e34ccc2 , which incorporates parsing
     bug patches and new lineinfo/comments in ASTs.
   added: Lua source comments now transfered to C source.
+  added: C functions converted from Lua functions are now named based on
+         the Lua function name (e.g. "function example()" --> "int
+         lcf1_example(lua_State*)").
 
 2008-08-02
   added: support LUA_INIT environment variable.
