@@ -12,7 +12,6 @@ source to a Metalua-style[1] AST over which the compiler then
 operates.  lua2c does not require Metalua itself though since gg/mlp
 is bundled in the distribution and is written in pure Lua.
 
-
 == Usage ==
 
 Example usage:
@@ -105,6 +104,14 @@ will improve that.
 == Project Page ==
 
 The project page is currently http://lua-users.org/wiki/LuaToCee .
+
+== Download ==
+
+  * Latest development source (recommended): http://github.com/davidm/lua2c/ .
+    From here you can browse the source, download a tar/zip snapshot, or
+    checkout with git by running "{{git clone
+    git://github.com/davidm/lua2c.git}}".
+  * Last release distribution: (see Project Page above)
 
 == Licensing ==
 
