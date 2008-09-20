@@ -6,6 +6,7 @@
   added: C functions converted from Lua functions are now named based on
          the Lua function name (e.g. "function example()" --> "int
          lcf1_example(lua_State*)").
+  refactor: split lua2c.lua into lua2c.lua + ast2cast.lua + cast2string.lua.
 
 2008-08-02
   added: support LUA_INIT environment variable.
