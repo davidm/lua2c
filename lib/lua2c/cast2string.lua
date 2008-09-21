@@ -46,7 +46,7 @@ local no_semicolon = {
 }
 
 -- Converts C AST to C code string.
-local function cast_tostring(cast)
+local function cast_to_string(cast)
 --  DEBUG(type(cast) == 'table' and cast.tag or cast)
   if type(cast) ~= 'table' then
     if type(cast) =='number' then  -- convenience function
@@ -76,51 +76,51 @@ local function cast_tostring(cast)
   elseif cast.tag == 'Op' then
     local opid, a_cast, b_cast = cast[1], cast[2], cast[3]
     local pa,pz = '(', ')'  -- improve: sometimes can be avoided
-    return pa .. cast_tostring(a_cast) ..
-           ' ' .. opid .. ' ' .. cast_tostring(b_cast) .. pz
+    return pa .. cast_to_string(a_cast) ..
+           ' ' .. opid .. ' ' .. cast_to_string(b_cast) .. pz
   elseif cast.tag == 'Include' then
     local name = cast[1]
     return '#include ' .. name
   elseif cast.tag == 'Let' then
     local id, val_cast = cast[1], cast[2]
-    return "const int " .. id .. " = " .. cast_tostring(val_cast)
+    return "const int " .. id .. " = " .. cast_to_string(val_cast)
   elseif cast.tag == 'LetDouble' then
     local id, val_cast = cast[1], cast[2]
-    return "const double " .. id .. " = " .. cast_tostring(val_cast)
+    return "const double " .. id .. " = " .. cast_to_string(val_cast)
   elseif cast.tag == 'LetMutableDouble' then
     local id, val_cast = cast[1], cast[2]
-    return "double " .. id .. " = " .. cast_tostring(val_cast)
+    return "double " .. id .. " = " .. cast_to_string(val_cast)
   elseif cast.tag == 'LetInt' then
     local id, val_cast = cast[1], cast[2]
-    return "const int " .. id .. " = " .. cast_tostring(val_cast)
+    return "const int " .. id .. " = " .. cast_to_string(val_cast)
   elseif cast.tag == 'Enum' then
     local id, val_cast = cast[1], cast[2]
     return "enum { " .. id .. " = " .. tostring(val_cast) .. " }"
   elseif cast.tag == 'Not' then
     local a_ast = cast[1]
     local pa,pz = '(', ')'  -- improve: sometimes can be avoided
-    return '!' .. pa .. cast_tostring(a_ast) .. pz
+    return '!' .. pa .. cast_to_string(a_ast) .. pz
   elseif cast.tag == 'Return' then
     local a_ast = cast[1]
-    return 'return' .. (a_ast and ' ' .. cast_tostring(a_ast) or '')
+    return 'return' .. (a_ast and ' ' .. cast_to_string(a_ast) or '')
   elseif cast.tag == 'Break' then
     return 'break'
   elseif cast.tag == 'Call' then
     local args = {tag='C'}
     for i=2,#cast do
-      args[#args+1] = cast_tostring(cast[i])
+      args[#args+1] = cast_to_string(cast[i])
     end
     return cast[1] .. '(' .. table.concat(args, ',') .. ')'
   elseif cast.tag == 'CallL' then
     local args = {tag='C', 'L'}
     for i=2,#cast do
-      args[#args+1] = cast_tostring(cast[i])
+      args[#args+1] = cast_to_string(cast[i])
     end
     return cast[1] .. '(' .. table.concat(args, ',') .. ')'
   elseif cast.tag == 'Def' then
     local ts = {}
     for i,stat_cast in ipairs(cast) do
-      ts[i] = cast_tostring(stat_cast) .. '\n\n'
+      ts[i] = cast_to_string(stat_cast) .. '\n\n'
     end
     local ccode = table.concat(ts)
     return ccode
@@ -139,7 +139,7 @@ local function cast_tostring(cast)
         postcomment = ccomment(stat_cast.postcomment) .. '\n'
       end
       local semi = no_semicolon[stat_cast.tag] and '' or ';'
-      ts[#ts+1] = comment .. cast_tostring(stat_cast) .. semi .. '\n' ..
+      ts[#ts+1] = comment .. cast_to_string(stat_cast) .. semi .. '\n' ..
               postcomment
     end
     if cast.postcomment then
@@ -152,17 +152,17 @@ local function cast_tostring(cast)
     local ccode = ''
     for i=2,#cast,2 do
       if i ~= 2 then ccode = ccode .. 'else ' end
-      ccode = ccode .. 'if (' .. cast_tostring(cast[i-1]) .. ') {\n' ..
-              cast_tostring(cast[i]) .. '}'
+      ccode = ccode .. 'if (' .. cast_to_string(cast[i-1]) .. ') {\n' ..
+              cast_to_string(cast[i]) .. '}'
     end
     if #cast % 2 == 1 then
-      ccode = ccode .. '\nelse {\n' .. cast_tostring(cast[#cast]) .. '}'
+      ccode = ccode .. '\nelse {\n' .. cast_to_string(cast[#cast]) .. '}'
     end
     return ccode
   elseif cast.tag == 'While' then
     local expr_cast, block_cast = cast[1], cast[2]
-    local ccode = 'while (' .. cast_tostring(expr_cast) .. ') {\n' ..
-                  cast_tostring(block_cast) .. '}'
+    local ccode = 'while (' .. cast_to_string(expr_cast) .. ') {\n' ..
+                  cast_to_string(block_cast) .. '}'
     return ccode
   elseif cast.tag == 'Functiondef' then
     local id, body_cast = cast[1], cast[2]
@@ -177,15 +177,15 @@ local function cast_tostring(cast)
     local ccode =
       comment ..
       'static int ' .. id .. ' (lua_State * L) {\n' ..
-      cast_tostring(body_cast) .. '}\n' .. postcomment
+      cast_to_string(body_cast) .. '}\n' .. postcomment
     return ccode
   elseif cast.tag:find'lua_' == 1 then  -- convenience function
-    return cast_tostring{tag='CallL', cast.tag, unpack(cast)}
+    return cast_to_string{tag='CallL', cast.tag, unpack(cast)}
   else
     assert(false, cast.tag)
   end
 end
-M.cast_tostring = cast_tostring
+M.cast_to_string = cast_to_string
 
 return M
 

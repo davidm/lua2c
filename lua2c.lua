@@ -73,7 +73,7 @@ local function DEBUG(...)
 end
 
 -- Converts Lua source string to Lua AST (via mlp/gg)
-function ast_of_luastring (src)
+function string_to_ast(src)
   local  lx  = mlp.lexer:newstream (src)
   local  ast = mlp.chunk (lx)
   return ast
@@ -90,13 +90,10 @@ local src_file = assert(io.open (src_filename, 'r'))
 local src = src_file:read '*a'; src_file:close()
 src = src:gsub('^#[^\r\n]*', '') -- remove any shebang
 
-local ast = ast_of_luastring(src)
+local ast = string_to_ast(src)
 
-A2C.firstpass(src, ast)
--- DEBUG(ast)
-
-local cast = A2C.genfull(ast)
+local cast = A2C.ast_to_cast(src, ast)
 -- DEBUG(cast)
 
-io.stdout:write(C2S.cast_tostring(cast))
+io.stdout:write(C2S.cast_to_string(cast))
 

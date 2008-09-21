@@ -22,17 +22,32 @@ local table        = _G.table
 local unpack       = _G.unpack
 
 
--- LUA_MINSTACK value in luaconf.h
-local LUA_MINSTACK = 20
-
--- Lua code string currently converting.
-local src
+-- converts Metalua AST <ast> built from string
+-- <src> to C AST <cast>.
+-- returns(cast)
+local function ast_to_cast(src, ast)
+--##------------------------------------------------------------------
+--## Note: this is a large function nesting many closures;
+--## indentation of its contents is omitted.
+--##------------------------------------------------------------------
 
 
 -- info on current scope. includes
 -- table of local variables.
 -- Maps name -> stack index
 local currentscope = {['.closurelevel'] = 0}
+
+-- topmost stack index
+local idxtop = 0
+
+local names = {}
+
+local _varid = 0
+
+-- note: is_created maps function name to boolean indicated whether
+-- function has been generated.
+local is_created = {}
+
 
 -- Information on function currently being compiled.
 local funcinfo = {is_vararg=false, nformalparams=0,
@@ -43,8 +58,9 @@ local funcinfo = {is_vararg=false, nformalparams=0,
 }
 
 
--- topmost stack index
-local idxtop = 0
+-- LUA_MINSTACK value in luaconf.h
+local LUA_MINSTACK = 20
+
 
 -- Mutators for idxtop.
 local function idxtop_change(n)
@@ -312,7 +328,6 @@ end
 -- orig_name is string of arbitrary text to base variable name
 --   on (optional and may be ignored)
 -- prefix is prefix string for variable (defaults to '')
-local names = {}
 local MAX_IDENTIFIER_LENGTH = 60 -- note: not a hard limit
 local function nextid(orig_name, prefix)
   orig_name = orig_name or ''
@@ -328,7 +343,6 @@ local function nextid(orig_name, prefix)
 end
 
 -- Gets next unique ID for lexical variable.
-local _varid = 0
 local function nextvarid()
   _varid = _varid + 1
   return _varid
@@ -409,11 +423,6 @@ end
 -- forward declarations
 local genexpr
 local genblock
-
--- note: is_created maps function name to boolean indicated whether
--- function has been generated.
-local is_created = {}
-
 
 local function genarithbinop(ast, where)
   -- Returns C AST node definition arithmetic binary op with given
@@ -2056,9 +2065,7 @@ M.genfull = genfull
 -- Each `Function node is marked with field uses_upvalue = true if it uses
 -- at least one upvalue.
 --:TODO:document
-local function firstpass(asrc, ast)
-  src = asrc
-
+local function firstpass(ast)
   -- Represents current lexical scope.
   -- Maps variable name to variable info (see newvar).
   local scope = {}
@@ -2185,6 +2192,20 @@ local function firstpass(asrc, ast)
 
   process(ast)
 end
-M.firstpass = firstpass
+
+
+firstpass(ast)
+return genfull(ast)
+
+
+--##------------------------------------------------------------------
+--## Note: this is a large function nesting many closures;
+--## indentation of its contents is omitted.
+--##------------------------------------------------------------------
+end
+-- end of ast_to_cast
+
+
+M.ast_to_cast = ast_to_cast
 
 return M
