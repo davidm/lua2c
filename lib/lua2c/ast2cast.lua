@@ -310,7 +310,7 @@ end
 -- (non-psuedoindices).
 -- Note: allows C AST.
 local function adjustidx(offset, idx)
-  if type(idx) == 'table' or idx > 0 then
+  if type(idx) ~= 'number' or idx > 0 then
     return idx
   else -- relative stack index or pseudoindex
      -- FIX:pseudoindices not supported?
@@ -325,9 +325,9 @@ local function adjustidxs(...)
   local result = {...}
   for i=#result,1,-1 do
     local idx = result[i]
-    if type(idx) ~= 'table' and idx < 0 then
+    if type(idx) == 'number' and idx < 0 then
             --FIX: and idx > LUA_REGISTRYINDEX ?
-      result[i] = result[i] - nused
+      result[i] = result[i] - nused   -- adjust
     end
     if idx == -1 then
       nused = nused + 1
