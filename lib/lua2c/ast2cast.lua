@@ -7,6 +7,19 @@
 -- (c) 2008 David Manura.  Licensed in the same terms as Lua (MIT license).
 -- See included LICENSE file for full licensing details.
 
+--luaanalyze checks
+--! local t_G = typeimport"luaanalyze.library.standard"
+--! t_G.add_field "mlc"
+--! t_G.add_field "mlp"
+--! local ast_t = require "luaanalyze.type.ast"
+--! ast_t.add_field "name"
+--! ast_t.add_field "upvalue"
+--! ast_t.add_field "idx"
+--! ast_t.add_field "type"
+--! typematch("[^c]ast$", ast_t) --FIX:match
+--! checkglobals()
+--! checktypes()
+
 local M = {}
 
 local _G           = _G
