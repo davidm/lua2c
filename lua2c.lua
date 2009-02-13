@@ -43,7 +43,7 @@ local require      = _G.require
 local string       = _G.string
 local table        = _G.table
 
-package.path = './lib/?.lua;' .. package.path
+-- package.path = './lib/?.lua;' .. package.path
 
 -- note: includes gg/mlp Lua parsing Libraries taken from Metalua.
 require "lexer"
@@ -73,7 +73,7 @@ local function DEBUG(...)
 end
 
 -- Converts Lua source string to Lua AST (via mlp/gg)
-function string_to_ast(src)
+local function string_to_ast(src)
   local  lx  = mlp.lexer:newstream (src)
   local  ast = mlp.chunk (lx)
   return ast

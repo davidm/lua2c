@@ -6,13 +6,18 @@
 # option -c causes compilation only (no run)
 # option -C causes C source generation only (no compile or run)
 
+pushd "`dirname \"$0\"`" > /dev/null
+export CWD="$PWD"
+popd > /dev/null
+
 # You may need to change these variables:
 LUA=lua
 CC=gcc
-CFLAGS="-O2 -DNDEBUG -Wall -Ilua/src"
+CFLAGS="-O3 -fomit-frame-pointer -DNDEBUG -Wall -Ilua/src"
+#CFLAGS="-O2 -DNDEBUG -Wall -Ilua/src"
 #CFLAGS=-g
 LFLAGS="-Llua/src -llua"
-LUA2C="${LUA} lua2c.lua"
+LUA2C="${LUA} $CWD/lua2c.lua"
 #LUA2C="./lua2c"
 
 COMPILEONLY=
@@ -38,7 +43,7 @@ LUAFILE=$1
 FILENAME=${LUAFILE%.*}
 CFILE=${FILENAME}.c
 
-${LUA2C} ${LUAFILE} > ${CFILE} || exit 1
+LUA_PATH=$CWD/lib/?.lua ${LUA2C} ${LUAFILE} > ${CFILE} || exit 1
 if [ "$COMPILEONLY" = "2" ]
 then
   exit 0
