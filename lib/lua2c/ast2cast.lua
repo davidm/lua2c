@@ -249,6 +249,25 @@ local function tag(o)
   return type(o) == 'table' and o.tag or nil
 end
 
+-- returns C AST of double for given C AST idx.
+local function todouble(idx)
+  if type(idx) == 'string' then
+    return C.Id(idx)
+  else
+    return C.lua_tonumber(idx)
+  end
+end
+
+-- returns C AST of bool for given C AST idx.
+local function tobool(idx)
+  if type(idx) == 'string' then
+    return C.Id(idx)
+  else
+    return C.lua_toboolean(idx)
+  end
+end
+
+
 -- Adjusts absolute index of local variable,
 -- given that in vararg (...) functions, base index depends on
 -- arguments passed in.  Can return C AST.
@@ -627,7 +646,7 @@ local function gennotop(ast, where)
 
   local a_idx = cast:append(genexpr(a_ast, 'anywhere')).idx
 
-  cast:append(C.lua_pushboolean(C.Not(C.lua_toboolean(a_idx))))
+  cast:append(C.lua_pushboolean(C.Not(tobool(a_idx))))
   if a_idx == -1 then
     cast:append(C.lua_remove(-2))
   end
@@ -1003,7 +1022,6 @@ end
 -- Converts Lua `Call or `Invoke AST to C AST.
 local function gencall(ast, where, nret)
   local isinvoke = ast.tag == 'Invoke'  -- method call
-
   local cast = cexpr()
 
   -- whether last argument might possibly return multiple values
@@ -1282,10 +1300,10 @@ local function genif(ast, i)
     -- expression
     local a_idx = cast:append(genexpr(expr_ast, 'anywhere')).idx
     if a_idx ~= -1 then
-      if_args[#if_args+1] = C.lua_toboolean(a_idx)
+      if_args[#if_args+1] = tobool(a_idx)
     else
       local id = nextid();
-      cast:append(C.Let(id, C.lua_toboolean(-1)))
+      cast:append(C.Let(id, tobool(-1)))
       cast:append(C.lua_pop(1))
       if_args[#if_args+1] = C.Id(id)
     end
@@ -1365,10 +1383,10 @@ local function genfornum(ast)
   cast:append(
     C.If(C.Not(expr_cast),
          {C.CallL('luaL_error', "'for' limit must be a number")}))
-  cast:append(C.LetMutableDouble(var_id, C.lua_tonumber(var_idx)))
-  cast:append(C.LetDouble(limit_id, C.lua_tonumber(limit_idx)))
+  cast:append(C.LetMutableDouble(var_id, todouble(var_idx)))
+  cast:append(C.LetDouble(limit_id, todouble(limit_idx)))
   if e3_ast then
-    cast:append(C.LetDouble(step_id, C.lua_tonumber(step_idx)))
+    cast:append(C.LetDouble(step_id, todouble(step_idx)))
   else
     cast:append(C.LetDouble(step_id, 1.0))
   end
@@ -1572,7 +1590,7 @@ local function genwhile(ast)
     local block_cast = cexpr(); do
       local expr_idx = block_cast:append(genexpr(expr_ast, 'anywhere')).idx
       block_cast:append(
-        C.If(C.Not(C.lua_toboolean(expr_idx)), {C.Break()}))
+        C.If(C.Not(tobool(expr_idx)), {C.Break()}))
       if expr_idx == -1 then
         block_cast:append(C.lua_pop(1))
       end
@@ -1626,7 +1644,7 @@ local function genrepeat(ast)
       local expr_idx = block_cast:append(genexpr(expr_ast, 'anywhere')).idx
       idxtop_change(1)
       block_cast:append(
-        C.If(C.lua_toboolean(expr_idx), {C.Break()}))
+        C.If(tobool(expr_idx), {C.Break()}))
 
       restore_stack_rel(block_cast, base_idx)
       restore_scope(currentscope_save)
