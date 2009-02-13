@@ -89,7 +89,7 @@ function for_header (lx)
    else
       -- Forin: there might be several vars
       local a = lx:is_keyword (lx:next(), ",", "in")
-      if a=="in" then var_list = { var } else
+      if a=="in" then var_list = { var, lineinfo = var.lineinfo } else
          -- several vars; first "," skipped, read other vars
          var_list = gg.list{ 
             primary = id, separators = ",", terminators = "in" } (lx)
@@ -179,7 +179,7 @@ local function assign_or_call_stat_parser (lx)
    end
 end
 
-local local_stat_parser = gg.multisequence{
+local_stat_parser = gg.multisequence{
    -- local function <name> <func_val>
    { "function", id, func_val, builder = 
       function(x) 

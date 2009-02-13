@@ -75,7 +75,7 @@ end
 
 -------------------------------------------------------------------------------
 -- Return true iff [x] is a parser.
--- If it's a gg-generated parser, reutrn the name of its kind.
+-- If it's a gg-generated parser, return the name of its kind.
 -------------------------------------------------------------------------------
 function is_parser (x)
    return type(x)=="function" or getmetatable(x)==parser_metatable and x.kind
@@ -191,8 +191,9 @@ function sequence (p)
       if tb == "string" then seq.tag = builder
       elseif tb == "function" or builder and builder.__call then seq = builder(seq)
       elseif builder == nil then -- nothing
-      else error("Invalid builder of type "..tb.." in sequence") end
+      else error ("Invalid builder of type "..tb.." in sequence") end
       seq = transform (seq, self, fli, lli)
+      assert (not seq or seq.lineinfo)
       return seq
    end
 
@@ -257,13 +258,19 @@ function multisequence (p)
    -------------------------------------------------------------------
    function p:add (s)
       -- compile if necessary:
+      local keyword = s[1]
       if not is_parser(s) then sequence(s) end
-      if type(s[1]) ~= "string" then 
-         error "Invalid sequence for multiseq"
-      elseif self.sequences[s[1]] then 
-         printf (" *** Warning: keyword %q overloaded in multisequence ***", s[1])
+      if is_parser(s) ~= 'sequence' or type(keyword) ~= "string" then 
+         if self.default then -- two defaults
+            error ("In a multisequence parser, all but one sequences "..
+                   "must start with a keyword")
+         else self.default = s end -- first default
+      elseif self.sequences[keyword] then -- duplicate keyword
+         eprintf (" *** Warning: keyword %q overloaded in multisequence ***", keyword)
+         self.sequences[keyword] = s
+      else -- newly caught keyword
+         self.sequences[keyword] = s
       end
-      self.sequences[s[1]] = s
    end -- </multisequence.add>
 
    -------------------------------------------------------------------
@@ -276,9 +283,9 @@ function multisequence (p)
    -------------------------------------------------------------------
    function p:del (kw) 
       if not self.sequences[kw] then 
-         printf("*** Warning: trying to delete sequence starting "..
-                "with %q from a multisequence having no such "..
-                "entry ***", kw) end
+         eprintf("*** Warning: trying to delete sequence starting "..
+                 "with %q from a multisequence having no such "..
+                 "entry ***", kw) end
       local removed = self.sequences[kw]
       self.sequences[kw] = nil 
       return removed
@@ -472,7 +479,8 @@ function expr (p)
          local p2_func, p2 = get_parser_info (self.suffix)
          if not p2 then return false end
          if not p2.prec or p2.prec>=prec then
-            local fli = lx:lineinfo_right()
+            --local fli = lx:lineinfo_right()
+            local fli = e.lineinfo.first
             local op = p2_func(lx)
             if not op then return false end
             local lli = lx:lineinfo_left()
@@ -611,6 +619,11 @@ end --</list>
 -- [gg.onkeyword] parser is the result of the subparser (modulo
 -- [transformers] applications).
 --
+-- lineinfo: the keyword is *not* included in the boundaries of the
+-- resulting lineinfo. A review of all usages of gg.onkeyword() in the
+-- implementation of metalua has shown that it was the appropriate choice
+-- in every case.
+--
 -- Input fields:
 --
 -- * [name]: as usual
@@ -643,10 +656,12 @@ function onkeyword (p)
    -------------------------------------------------------------------
    function p:parse(lx)
       if lx:is_keyword (lx:peek(), unpack(self.keywords)) then
-         local fli = lx:lineinfo_right()
+         --local fli = lx:lineinfo_right()
          if not self.peek then lx:next() end
-         local lli = lx:lineinfo_left()
-         return transform (self.primary(lx), p, fli, lli)
+         local content = self.primary (lx)
+         --local lli = lx:lineinfo_left()
+         local fli, lli = content.lineinfo.first, content.lineinfo.last
+         return transform (content, p, fli, lli)
       else return false end
    end
 
@@ -658,6 +673,8 @@ function onkeyword (p)
       if type(x)=="string" then table.insert (p.keywords, x)
       else assert (not p.primary and is_parser (x)); p.primary = x end
    end
+   if not next (p.keywords) then 
+      eprintf("Warning, no keyword to trigger gg.onkeyword") end
    assert (p.primary, 'no primary parser in gg.onkeyword')
    return p
 end --</onkeyword>

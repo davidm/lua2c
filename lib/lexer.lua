@@ -7,9 +7,6 @@
 --
 -- TODO: 
 --
--- * Make it possible to change lexer on the fly. This implies the
---   ability to easily undo any pre-extracted tokens;
---
 -- * Make it easy to define new flavors of strings. Replacing the
 --   lexer.patterns.long_string regexp by an extensible list, with
 --   customizable token tag, would probably be enough. Maybe add:
@@ -50,12 +47,10 @@ lexer.patterns = {
    final_short_comment = "^%-%-([^\n]*)()$",
    long_comment        = "^%-%-%[(=*)%[\n?(.-)%]%1%]()",
    long_string         = "^%[(=*)%[\n?(.-)%]%1%]()",
-   number_mantissa     = {
-      "^%d+%.?%d*()",
-      "^%d*%.%d+()" },
-   number_exponant = "^[eE][%+%-]?%d+()",
-   number_hex      = "^0[xX]%x+()",
-   word            = "^([%a_][%w_]*)()"
+   number_mantissa     = { "^%d+%.?%d*()", "^%d*%.%d+()" },
+   number_exponant     = "^[eE][%+%-]?%d+()",
+   number_hex          = "^0[xX]%x+()",
+   word                = "^([%a_][%w_]*)()"
 }
 
 ----------------------------------------------------------------------
@@ -66,10 +61,23 @@ local function unescape_string (s)
 
    -- Turn the digits of an escape sequence into the corresponding
    -- character, e.g. [unesc_digits("123") == string.char(123)].
-   local function unesc_digits (x)
-      local k, j, i = x:reverse():byte(1, 3)
+   local function unesc_digits (backslashes, digits)
+      if #backslashes%2==0 then
+         -- Even number of backslashes, they escape each other, not the digits.
+         -- Return them so that unesc_letter() can treaat them
+         return backslashes..digits
+      else
+         -- Remove the odd backslash, which escapes the number sequence.
+         -- The rest will be returned and parsed by unesc_letter()
+         backslashes = backslashes :sub (1,-2)
+      end
+      local k, j, i = digits:reverse():byte(1, 3)
       local z = _G.string.byte "0"
-      return _G.string.char ((k or z) + 10*(j or z) + 100*(i or z) - 111*z)
+      local code = (k or z) + 10*(j or z) + 100*(i or z) - 111*z
+      if code > 255 then 
+          error ("Illegal escape sequence '\\"..digits.."' in string: ASCII codes must be in [0..255]") 
+      end
+      return backslashes .. string.char (code)
    end
 
    -- Take a letter [x], and returns the character represented by the 
@@ -83,8 +91,8 @@ local function unescape_string (s)
    end
 
    return s
+      :gsub ("(\\+)([0-9][0-9]?[0-9]?)", unesc_digits)
       :gsub ("\\(%D)",unesc_letter)
-      :gsub ("\\([0-9][0-9]?[0-9]?)", unesc_digits)
 end
 
 lexer.extractors = {
@@ -96,7 +104,9 @@ lexer.token_metatable = {
 --         __tostring = function(a) 
 --            return string.format ("`%s{'%s'}",a.tag, a[1]) 
 --         end 
-      } 
+} 
+      
+lexer.lineinfo_metatable = { }
 
 ----------------------------------------------------------------------
 -- Really extract next token fron the raw string 
@@ -109,7 +119,7 @@ function lexer:extract ()
    local loc = self.i
    local eof, token
 
-   -- Put line info, comments and metatable arount the tag and content
+   -- Put line info, comments and metatable around the tag and content
    -- provided by extractors, thus returning a complete lexer token.
    -- first_line: line # at the beginning of token
    -- first_column_offset: char # of the last '\n' before beginning of token
@@ -135,6 +145,9 @@ function lexer:extract ()
       -- lineinfo entries: [1]=line, [2]=column, [3]=char, [4]=filename
       local fli = { first_line, loc-first_column_offset, loc, self.src_name }
       local lli = { self.line, self.i-self.column_offset-1, self.i-1, self.src_name }
+      --Pluto barfes when the metatable is set:(
+      setmetatable(fli, lexer.lineinfo_metatable)
+      setmetatable(lli, lexer.lineinfo_metatable)
       local a = { tag = tag, lineinfo = { first=fli, last=lli }, content } 
       if lli[2]==-1 then lli[1], lli[2] = lli[1]-1, previous_line_length-1 end
       if #self.attached_comments > 0 then 

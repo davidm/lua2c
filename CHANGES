@@ -1,3 +1,6 @@
+2009-03-13
+  upgraded to metalua 0.5 from git
+
 2008-09-20
   upgraded to metalua libraries to git version
     c995760d4ba67c4250ac6029c30ce9491e34ccc2 , which incorporates parsing
