@@ -8,7 +8,7 @@ for a large subset of the Lua language (see limitations below).
 
 The compiler is written entirely in Lua, and no build/install is
 needed.  This project reuses Metalua's gg/mlp parser to convert Lua
-source to a Metalua-style[1] AST over which the compiler then
+source to a Metalua-style [1] AST over which the compiler then
 operates.  lua2c does not require Metalua itself though since gg/mlp
 is bundled in the distribution and is written in pure Lua.
 
@@ -36,23 +36,23 @@ without running.)
 
 == Related Work ==
 
-  * luac2c - This related effort by Hisham Muhammad[2] converts Lua
+  * luac2c - This related effort by Hisham Muhammad [2] converts Lua
     bytecodes to C source, whereas this project converts Lua
     source to C source.  luac2c runs into a few similar
     limitations as given below.  luac2c has remained experimental but
     superseded Luiz Henrique De Figueiredo's very basic but similarly
-    named lua2c for Lua 4.0[3].
+    named lua2c for Lua 4.0 [3].
 
-  * luagen++[4] uses C++ expression templates to translate
+  * luagen++ [4] uses C++ expression templates to translate
     Lua-like C++ statements to C API calls.  Some of the code
     generation structure is actually fairly similar to lua2c.
 
-  * Python Pyrex[5] does something similar in Python but has the
+  * Python Pyrex [5] does something similar in Python but has the
     added goal of lowering the boundary between C and Python
     code.  Something like that could be done with lua2c,
     especially since lua2c uses the extensible gg parser.
 
-  * Clue by David Given[6] does the opposite: convert C source
+  * Clue by David Given [6] does the opposite: convert C source
     to Lua source.
 
   * luac + BinToCee allow compilation of Lua source to bytecodes
@@ -80,7 +80,7 @@ has a number of potential uses:
 
 == Limitations / Status ==
 
-WARNING: This code passes much of the Lua 5.1 test suite[7] and can
+WARNING: This code passes much of the Lua 5.1 test suite [7] and can
 compile itself, but the code is new and there can still be errors.
 In particular, a few language features (e.g. coroutines) are not
 implemented.  See comments in lua2c.lua for details.  Please report
@@ -90,7 +90,7 @@ lua2c does not currently support coroutines, functions that normally
 reject C functions (e.g. setfenv), and possibly tail call
 optimizations.  Not all of these have the exact analogue in C.
 Coroutines might not ever be supported. However, some solutions might
-be explored[8][9], including possibly generating code that maintains
+be explored [8][9], including possibly generating code that maintains
 the coroutine context in Lua tables.
 
 Closures and upvalues are implemented, but creating and accessing
@@ -98,7 +98,7 @@ upvalues is somewhat slow.
 
 Once the code is more complete/robust, more attention can be given to
 optimizing the code generation.  Performance was 25%-75% of regular
-Lua when running a few tests[11], but hopefully future optimizations
+Lua when running a few tests [11], but hopefully future optimizations
 will improve that.
 
 == Project Page ==
