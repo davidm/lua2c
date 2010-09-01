@@ -94,12 +94,22 @@ be explored [8][9], including possibly generating code that maintains
 the coroutine context in Lua tables.
 
 Closures and upvalues are implemented, but creating and accessing
-upvalues is somewhat slow.
+upvalues is somewhat slow due to the implementation (see implementation
+notes below) and hopefully can be improved.
 
 Once the code is more complete/robust, more attention can be given to
 optimizing the code generation.  Performance was 25%-75% of regular
 Lua when running a few tests [11], but hopefully future optimizations
 will improve that.
+
+== Lua 5.2 Notes ==
+
+Note: LuaFiveTwo (as of 5.2.0-work4) deprecates getfenv and setfenv,
+which eliminates one of the limitations above. LuaFiveTwo has new lua_arith
+and lua_compare C API function, which eliminate the need for lua2c to
+reimplement these functions. LuaFiveTwo also has new lua_yieldk, lua_callk,
+and lua_pcallk functions for coroutines and might help to implement
+coroutines in lua2c. 
 
 == Project Page ==
 
