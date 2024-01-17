@@ -11,12 +11,13 @@ export CWD="$PWD"
 popd > /dev/null
 
 # You may need to change these variables:
-LUA=lua
-CC=gcc
-CFLAGS="-O3 -fomit-frame-pointer -DNDEBUG -Wall -Ilua/src"
+LUA=lua5.1
+CC=clang
+LUAPATH="/usr/include/lua5.1/"
+CFLAGS="-O3 -fomit-frame-pointer -DNDEBUG -Wall -I${LUAPATH}"
 #CFLAGS="-O2 -DNDEBUG -Wall -Ilua/src"
 #CFLAGS=-g
-LFLAGS="-Llua/src -llua"
+LFLAGS="-Llua/src -llua5.1"
 LUA2C="${LUA} $CWD/lua2c.lua"
 #LUA2C="./lua2c"
 
@@ -49,6 +50,7 @@ then
   exit 0
 fi
 
+echo ${CC} ${CFLAGS} ${CFILE} -o ${FILENAME} ${LFLAGS} 
 ${CC} ${CFLAGS} ${CFILE} -o ${FILENAME} ${LFLAGS} || exit 1
 if [ "$COMPILEONLY" = "1" ]
 then
